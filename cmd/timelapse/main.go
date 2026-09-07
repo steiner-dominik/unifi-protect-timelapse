@@ -25,6 +25,7 @@ import (
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/capture"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/config"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/hass"
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/health"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/monitor"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/notify"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/schedule"
@@ -189,6 +190,10 @@ func run() error {
 		return fmt.Errorf("creating spool directory: %w", err)
 	}
 
+	// Recorded so the health check subcommand, which is a separate process, can
+	// apply the same startup grace as the HTTP endpoint.
+	store.Update(func(d *state.Data) { d.StartedAt = time.Now() })
+
 	if cfg.SyncEnabled() && !sync.ArchiveAvailable() {
 		log.Warn("archive is not available at startup; images will be buffered locally until it returns",
 			"archive", cfg.Sync.ArchiveDir, "sentinel", cfg.Sync.Sentinel)
@@ -208,7 +213,7 @@ func run() error {
 		notifier:  notifier,
 	}
 
-	errCh := make(chan error, 6)
+	errCh := make(chan error, 7)
 	started := 0
 
 	if cfg.Capture.Enabled {
@@ -232,6 +237,12 @@ func run() error {
 		started++
 		go func() { errCh <- watchdog.Run(ctx) }()
 	}
+
+	// Without this, an unhealthy verdict is only ever visible to whatever polls
+	// the health check, and a container restarted by the Supervisor leaves no
+	// explanation at all in its own log.
+	started++
+	go func() { errCh <- runner.healthWatch(ctx) }()
 
 	if publisher.Enabled() {
 		started++
@@ -333,7 +344,7 @@ func runListCameras() error {
 	}
 
 	client := &http.Client{Timeout: cfg.Camera.Timeout}
-	if cfg.Camera.ProtectInsecureTLS {
+	if cfg.Camera.InsecureTLS {
 		client.Transport = insecureTransport()
 	}
 
@@ -372,44 +383,26 @@ func runHealthcheck() error {
 	if err != nil {
 		return err
 	}
-	if !cfg.Capture.Enabled && !cfg.Monitor.Enabled {
-		return nil
-	}
-	if !schedule.New(cfg).Active(time.Now().In(cfg.Location)) {
-		return nil
-	}
 
 	data, err := state.Load(cfg.StateDir)
 	if err != nil {
-		return fmt.Errorf("no state written yet: %w", err)
+		// Before the service has written anything there is nothing to judge.
+		// Reporting unhealthy here would restart a container that is merely
+		// starting.
+		return nil
 	}
 
-	if cfg.Capture.Enabled {
-		if data.LastCaptureSuccess.IsZero() {
-			return errors.New("no successful capture recorded")
-		}
-		if age := time.Since(data.LastCaptureSuccess); age > 2*cfg.Capture.Interval {
-			return fmt.Errorf("last successful capture was %s ago", age.Truncate(time.Second))
-		}
-		if data.FrameFrozen {
-			return fmt.Errorf("the camera has returned %d identical frames in a row", data.IdenticalCount)
-		}
+	active := schedule.New(cfg).Active(time.Now().In(cfg.Location))
+
+	// Uptime comes from the state file, because this runs as its own process
+	// and would otherwise apply no startup grace at all.
+	var uptime time.Duration
+	if !data.StartedAt.IsZero() {
+		uptime = time.Since(data.StartedAt)
 	}
 
-	if cfg.Monitor.Enabled {
-		if data.LastProbeAt.IsZero() {
-			return errors.New("no camera probe recorded")
-		}
-		if !data.CameraOnline {
-			return fmt.Errorf("the camera is not reachable: %s", data.LastProbeError)
-		}
-		if data.ArchiveNewestAt.IsZero() {
-			return errors.New("no image found in the archive")
-		}
-		if age := time.Since(data.ArchiveNewestAt); age > cfg.Monitor.ArchiveMaxAge {
-			return fmt.Errorf("newest archived image is %s old, limit is %s",
-				age.Truncate(time.Second), cfg.Monitor.ArchiveMaxAge)
-		}
+	if verdict := health.Evaluate(cfg, data, active, uptime); !verdict.Healthy {
+		return errors.New(verdict.Reason)
 	}
 	return nil
 }

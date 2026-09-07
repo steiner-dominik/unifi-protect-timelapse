@@ -8,6 +8,53 @@ matching add-on bump in
 [home-assistant-apps](https://github.com/steiner-dominik/home-assistant-apps) —
 publish the release here first.
 
+## 26.09.04
+
+### Fixed
+
+- **The insecure TLS toggle did nothing for the anonymous snapshot source.** It
+  was only ever applied when building the Protect source, so an HTTPS snapshot
+  URL with a self-signed certificate — the normal case for a camera on a local
+  address — failed however it was configured. It now applies to every camera
+  request, and to both halves of a fallback chain. The setting is now
+  `CAMERA_INSECURE_TLS`; `PROTECT_INSECURE_TLS` is still accepted.
+
+- **The service restarted in a loop with nothing in its log.** Three separate
+  faults combined here:
+
+  - The `healthcheck` subcommand behind the container HEALTHCHECK had its own
+    copy of the health logic, stricter than `/healthz`: no startup grace, and an
+    archive with no images treated as a failure. The endpoint reported healthy
+    while the health check failed and the runtime restarted the container. Both
+    now call one shared implementation, and the subcommand reads the service's
+    start time from the state file so it applies the same grace.
+  - The reason was invisible. A health check runs as its own process, so its
+    output goes to the container runtime rather than the service log. The
+    service now logs every change in its own health verdict, and notifies.
+  - `ARCHIVE_MAX_AGE` defaulted to three capture intervals even for an instance
+    that captures nothing. A watchdog cannot know how often something else fills
+    the archive, and against a 15 minute limit an archive written by a nightly
+    bulk transfer looks broken all day. The default is now 26 hours when not
+    capturing.
+
+- **The newest-image scan gave up on the first unrelated directory.** It
+  committed to the lexically greatest subdirectory at each level, so a NAS
+  directory such as `@eaDir`, `#recycle` or `.snapshot` — several of which sort
+  above a four digit year — made a full archive report as empty. It now matches
+  only date directories and backtracks past empty ones, so an empty directory
+  for today no longer hides yesterday's images.
+
+- An archive that has never held an image is no longer unhealthy. It may simply
+  be empty or newly mounted; only an archive that was growing and then stopped
+  is worth restarting for.
+
+### Changed
+
+- The Home Assistant add-on defaults to the anonymous snapshot source with no
+  fallback, so a fresh install works once the snapshot URL is filled in.
+  Defaulting to the Protect source meant a new install refused to start until
+  every Protect field was set.
+
 ## 26.09.03
 
 ### Fixed

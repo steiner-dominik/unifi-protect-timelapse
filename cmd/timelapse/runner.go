@@ -10,6 +10,7 @@ import (
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/capture"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/config"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/hass"
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/health"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/notify"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/schedule"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/state"
@@ -50,6 +51,56 @@ func (r *runner) captureLoop(ctx context.Context) error {
 		}
 
 		r.captureOnce(ctx)
+	}
+}
+
+// healthWatch logs every change in the health verdict.
+//
+// The container health check runs as a separate process, so when it fails the
+// reason goes to the container runtime rather than to this log. That made a
+// restart loop look like the service was stopping for no reason. Reporting
+// transitions here means the explanation is always in the log the operator
+// actually reads.
+func (r *runner) healthWatch(ctx context.Context) error {
+	const interval = 30 * time.Second
+
+	started := time.Now()
+	evaluate := func() health.Verdict {
+		active := r.scheduler.Active(time.Now().In(r.cfg.Location))
+		return health.Evaluate(r.cfg, r.store.Get(), active, time.Since(started))
+	}
+
+	previous := evaluate()
+	r.log.Info("health", "healthy", previous.Healthy, "reason", previous.Reason)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+
+		current := evaluate()
+		if current == previous {
+			continue
+		}
+
+		if current.Healthy {
+			r.log.Info("health recovered", "reason", current.Reason)
+		} else {
+			r.log.Error("unhealthy: the container runtime may restart this service",
+				"reason", current.Reason)
+			r.notifier.Send(ctx, notify.Event{
+				Kind:     "unhealthy",
+				Severity: "error",
+				Title:    "Timelapse is unhealthy",
+				Message:  current.Reason,
+			})
+		}
+		previous = current
 	}
 }
 

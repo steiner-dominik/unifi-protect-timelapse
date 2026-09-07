@@ -206,3 +206,105 @@ func TestRetryingHonoursContextCancellation(t *testing.T) {
 		t.Fatalf("retries did not stop promptly, took %s", elapsed)
 	}
 }
+
+// The toggle previously only reached the Protect source, so an HTTPS snapshot
+// URL with a self-signed certificate failed no matter how it was configured.
+func TestInsecureTLSAppliesToTheSnapshotSource(t *testing.T) {
+	want := jpegBody(4096)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(want)
+	}))
+	defer server.Close()
+
+	cfg := testCameraConfig(server.URL)
+
+	// Verification on: the self-signed certificate must be rejected.
+	strict, err := New(cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("building source: %v", err)
+	}
+	if _, err := strict.Snapshot(context.Background()); err == nil {
+		t.Fatal("expected the self-signed certificate to be rejected by default")
+	}
+
+	// Verification off: it must now succeed.
+	cfg.Camera.InsecureTLS = true
+	relaxed, err := New(cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("building source: %v", err)
+	}
+	got, err := relaxed.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("CAMERA_INSECURE_TLS should allow a self-signed camera certificate: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Errorf("got %d bytes, want %d", len(got), len(want))
+	}
+}
+
+func TestInsecureTLSAppliesToTheProtectSource(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(jpegBody(4096))
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{Camera: config.Camera{
+		Kind:            config.SourceProtect,
+		ProtectHost:     server.URL,
+		ProtectAPIKey:   "key",
+		ProtectCameraID: "abc123",
+		Timeout:         5 * time.Second,
+		Retries:         1,
+		MinImageBytes:   1024,
+		InsecureTLS:     true,
+	}}
+
+	source, err := New(cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("building source: %v", err)
+	}
+	if _, err := source.Snapshot(context.Background()); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+}
+
+// Both sources of a fallback chain must honour the setting, or a failover would
+// hit the same certificate error the primary just did.
+func TestInsecureTLSAppliesToBothSourcesOfAChain(t *testing.T) {
+	protect := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "console down", http.StatusInternalServerError)
+	}))
+	defer protect.Close()
+
+	snapshot := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(jpegBody(4096))
+	}))
+	defer snapshot.Close()
+
+	cfg := &config.Config{Camera: config.Camera{
+		Kind:            config.SourceProtect,
+		Fallback:        config.SourceSnapshot,
+		ProtectHost:     protect.URL,
+		ProtectAPIKey:   "key",
+		ProtectCameraID: "abc123",
+		SnapshotURL:     snapshot.URL,
+		Timeout:         5 * time.Second,
+		Retries:         1,
+		MinImageBytes:   1024,
+		InsecureTLS:     true,
+	}}
+
+	source, err := Build(cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("building pipeline: %v", err)
+	}
+	if _, err := source.Snapshot(context.Background()); err != nil {
+		t.Fatalf("the fallback should have served the frame over TLS: %v", err)
+	}
+	if used := LastUsed(source); used != "fallback" {
+		t.Errorf("LastUsed = %q, want fallback", used)
+	}
+}

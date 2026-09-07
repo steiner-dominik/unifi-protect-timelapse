@@ -97,7 +97,11 @@ type Camera struct {
 	ProtectAPIKey      string
 	ProtectCameraID    string
 	ProtectHighQuality bool
-	ProtectInsecureTLS bool
+
+	// InsecureTLS disables certificate verification for every camera request,
+	// not only the Protect console. Cameras present self-signed certificates
+	// too, and their snapshot endpoint is reached over HTTPS just as often.
+	InsecureTLS bool
 
 	Timeout       time.Duration
 	Retries       int
@@ -236,11 +240,14 @@ func Load() (*Config, error) {
 		ProtectAPIKey:      envStr("PROTECT_API_KEY", ""),
 		ProtectCameraID:    envStr("PROTECT_CAMERA_ID", ""),
 		ProtectHighQuality: envBool("PROTECT_HIGH_QUALITY", true, fail),
-		ProtectInsecureTLS: envBool("PROTECT_INSECURE_TLS", false, fail),
-		Timeout:            envDur("CAMERA_TIMEOUT", 20*time.Second, fail),
-		Retries:            envInt("CAMERA_RETRIES", 3, fail),
-		RetryDelay:         envDur("CAMERA_RETRY_DELAY", 3*time.Second, fail),
-		MinImageBytes:      int64(envInt("MIN_IMAGE_BYTES", 1024, fail)),
+		// PROTECT_INSECURE_TLS is the original name, kept because it is already
+		// in people's configurations; it was only ever applied to the Protect
+		// source, which was a bug rather than a feature.
+		InsecureTLS:   envBool("CAMERA_INSECURE_TLS", envBool("PROTECT_INSECURE_TLS", false, fail), fail),
+		Timeout:       envDur("CAMERA_TIMEOUT", 20*time.Second, fail),
+		Retries:       envInt("CAMERA_RETRIES", 3, fail),
+		RetryDelay:    envDur("CAMERA_RETRY_DELAY", 3*time.Second, fail),
+		MinImageBytes: int64(envInt("MIN_IMAGE_BYTES", 1024, fail)),
 	}
 
 	cfg.Capture = Capture{
@@ -304,9 +311,19 @@ func Load() (*Config, error) {
 		FrozenThreshold: envInt("FROZEN_FRAME_THRESHOLD", 3, fail),
 	}
 	if cfg.Monitor.ArchiveMaxAge <= 0 {
-		// Three intervals tolerates a single missed capture and its retries
-		// without flapping.
-		cfg.Monitor.ArchiveMaxAge = 3 * cfg.Capture.Interval
+		if cfg.Capture.Enabled {
+			// This instance writes the images, so the archive should grow at
+			// roughly the capture interval. Three of them tolerates a missed
+			// capture and its retries without flapping.
+			cfg.Monitor.ArchiveMaxAge = 3 * cfg.Capture.Interval
+		} else {
+			// This instance only watches, and it has no way to know how often
+			// the archive is actually written. A nightly bulk transfer is a
+			// perfectly normal arrangement, and against a three interval limit
+			// it would look broken all day. A day and a bit is the safe default;
+			// tighten ARCHIVE_MAX_AGE when images really do land continuously.
+			cfg.Monitor.ArchiveMaxAge = 26 * time.Hour
+		}
 	}
 
 	cfg.Video = Video{

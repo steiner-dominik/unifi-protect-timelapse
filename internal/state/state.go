@@ -62,6 +62,12 @@ type Data struct {
 	// CameraLastUsed names the endpoint that served the most recent frame:
 	// "primary", "fallback" or "none".
 	CameraLastUsed string `json:"cameraLastUsed"`
+
+	// StartedAt is when the running service started. It is persisted so the
+	// health check, which runs as a separate process, applies the same startup
+	// grace as the HTTP endpoint instead of judging a service that has barely
+	// begun.
+	StartedAt time.Time `json:"startedAt"`
 }
 
 // Store is a concurrency-safe, disk-backed Data.

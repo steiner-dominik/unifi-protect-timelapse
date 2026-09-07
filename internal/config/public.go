@@ -55,7 +55,7 @@ func (c *Config) Public() Public {
 		CameraSource:    string(c.Camera.Kind),
 		CameraFallback:  string(c.Camera.Fallback),
 		ProtectKeySet:   c.Camera.SecretSet(),
-		ProtectInsecure: c.Camera.ProtectInsecureTLS,
+		ProtectInsecure: c.Camera.InsecureTLS,
 		CaptureEnabled:  c.Capture.Enabled,
 		CaptureInterval: c.Capture.Interval.String(),
 		FilenamePrefix:  c.Capture.FilenamePrefix,

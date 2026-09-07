@@ -84,17 +84,22 @@ func newSource(cfg *config.Config, kind config.SourceKind, log *slog.Logger) (So
 		},
 	}
 
+	// Applies to every source. Cameras present self-signed certificates just as
+	// consoles do, and this previously only covered the Protect source, so the
+	// setting appeared to do nothing for an HTTPS snapshot URL.
+	if cfg.Camera.InsecureTLS {
+		log.Warn("TLS certificate verification is disabled for camera requests",
+			"source", kind,
+			"hint", "unset CAMERA_INSECURE_TLS once the endpoint presents a trusted certificate")
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // opt-in, self-signed camera and console certificates
+		}
+	}
+
 	switch kind {
 	case config.SourceSnapshot:
 		return &snapshotSource{client: client, url: cfg.Camera.SnapshotURL, cfg: cfg.Camera}, nil
 	case config.SourceProtect:
-		if cfg.Camera.ProtectInsecureTLS {
-			log.Warn("TLS certificate verification is disabled for the Protect console",
-				"hint", "set PROTECT_INSECURE_TLS=false once the console presents a trusted certificate")
-			client.Transport = &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // opt-in, self-signed console certificates
-			}
-		}
 		return &protectSource{client: client, cfg: cfg.Camera}, nil
 	default:
 		return nil, fmt.Errorf("unsupported camera source %q", kind)

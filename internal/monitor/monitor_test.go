@@ -183,3 +183,87 @@ func TestRunProbesImmediatelyAndStopsOnCancel(t *testing.T) {
 		t.Fatal("Run did not stop after the context was cancelled")
 	}
 }
+
+// NAS shares routinely contain directories like these, and several of them sort
+// above a four digit year in byte order. Committing to the lexically greatest
+// directory made a full archive look empty, which the health check read as a
+// failure and restarted the container over.
+func TestNewestFrameIgnoresNonDateDirectories(t *testing.T) {
+	_, cfg, _ := newTestMonitor(t, nil)
+
+	for _, noise := range []string{"@eaDir", "#recycle", ".snapshot", "lost+found", "zzz"} {
+		if err := os.MkdirAll(filepath.Join(cfg.Sync.ArchiveDir, noise, "junk"), 0o750); err != nil {
+			t.Fatalf("mkdir %s: %v", noise, err)
+		}
+	}
+	want := time.Now().Add(-time.Minute)
+	writeArchiveFrame(t, cfg.Sync.ArchiveDir, "2026-09-07", "snapshot_2026-09-07-17-00-00.jpg", want)
+
+	path, at, err := NewestFrame(cfg)
+	if err != nil {
+		t.Fatalf("NewestFrame: %v", err)
+	}
+	if filepath.Base(path) != "snapshot_2026-09-07-17-00-00.jpg" {
+		t.Errorf("found %q", filepath.Base(path))
+	}
+	if at.Before(want.Add(-time.Second)) {
+		t.Errorf("modification time = %v, want about %v", at, want)
+	}
+}
+
+// An empty directory for a newer day must not hide the images of an older one,
+// which is what happens when the scan commits to the newest branch.
+func TestNewestFrameBacktracksPastEmptyDirectories(t *testing.T) {
+	_, cfg, _ := newTestMonitor(t, nil)
+
+	// Today's directory exists but is still empty, as it is every morning
+	// before the first capture.
+	for _, empty := range []string{"2026-09-10", "2026-09-09", "2026-09-08"} {
+		dir := filepath.Join(cfg.Sync.ArchiveDir, "2026", "2026-09", empty)
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	want := time.Now().Add(-2 * time.Hour)
+	writeArchiveFrame(t, cfg.Sync.ArchiveDir, "2026-09-07", "snapshot_2026-09-07-21-55-00.jpg", want)
+
+	path, _, err := NewestFrame(cfg)
+	if err != nil {
+		t.Fatalf("NewestFrame should have backtracked to the last day with images: %v", err)
+	}
+	if filepath.Base(path) != "snapshot_2026-09-07-21-55-00.jpg" {
+		t.Errorf("found %q", filepath.Base(path))
+	}
+}
+
+// An empty month or year should not stop the search either.
+func TestNewestFrameBacktracksAcrossMonthsAndYears(t *testing.T) {
+	_, cfg, _ := newTestMonitor(t, nil)
+
+	if err := os.MkdirAll(filepath.Join(cfg.Sync.ArchiveDir, "2027", "2027-01", "2027-01-01"), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.Sync.ArchiveDir, "2026", "2026-12"), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeArchiveFrame(t, cfg.Sync.ArchiveDir, "2026-11-30",
+		"snapshot_2026-11-30-12-00-00.jpg", time.Now().Add(-time.Hour))
+
+	path, _, err := NewestFrame(cfg)
+	if err != nil {
+		t.Fatalf("NewestFrame: %v", err)
+	}
+	if filepath.Base(path) != "snapshot_2026-11-30-12-00-00.jpg" {
+		t.Errorf("found %q", filepath.Base(path))
+	}
+}
+
+func TestNewestFrameStillReportsAGenuinelyEmptyArchive(t *testing.T) {
+	_, cfg, _ := newTestMonitor(t, nil)
+	if err := os.MkdirAll(filepath.Join(cfg.Sync.ArchiveDir, "@eaDir"), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, _, err := NewestFrame(cfg); !errors.Is(err, ErrNoArchive) {
+		t.Fatalf("expected ErrNoArchive, got %v", err)
+	}
+}

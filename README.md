@@ -163,6 +163,13 @@ of problem, and each one feeds the health check, the metrics and the UI.
 
 Frozen-frame detection compares each frame with its predecessor;
 `FROZEN_FRAME_THRESHOLD` identical frames in a row is treated as a dead camera.
+
+Archive freshness needs a limit that matches how the archive is actually
+written, so `ARCHIVE_MAX_AGE` defaults by role: three capture intervals when
+this instance writes the images, and **26 hours when it only watches**. A
+watchdog cannot know how often something else fills the archive, and a nightly
+bulk transfer — which is how the setup this replaces worked — leaves it hours
+old all day. Tighten it only if images really do land continuously.
 Gap detection derives gaps from the spacing of the frames that are actually
 there, rather than from an expected schedule, because the interval and the
 window have changed over the years and a historical day should not be judged
@@ -238,7 +245,7 @@ to fix rather than five.
 | `PROTECT_API_KEY` | — | Required for `protect`. |
 | `PROTECT_CAMERA_ID` | — | Required for `protect`. |
 | `PROTECT_HIGH_QUALITY` | `true` | Request the full-resolution frame. |
-| `PROTECT_INSECURE_TLS` | `false` | Skip certificate verification. |
+| `CAMERA_INSECURE_TLS` | `false` | Skip certificate verification for all camera requests. `PROTECT_INSECURE_TLS` is accepted as the older name. |
 | `CAMERA_TIMEOUT` | `20s` | Per-attempt timeout. |
 | `CAMERA_RETRIES` | `3` | Attempts before a source counts as failed. |
 | `CAMERA_RETRY_DELAY` | `3s` | Delay between attempts. |
@@ -273,7 +280,7 @@ to fix rather than five.
 | --- | --- | --- |
 | `MONITOR_ENABLED` | on when not capturing | Camera probe and archive freshness. |
 | `MONITOR_INTERVAL` | `5m` | How often to probe. |
-| `ARCHIVE_MAX_AGE` | 3× capture interval | Staleness limit for the archive. |
+| `ARCHIVE_MAX_AGE` | see below | Staleness limit for the archive. |
 | `FROZEN_FRAME_THRESHOLD` | `3` | Identical frames meaning a dead camera. `0` disables. |
 | `METRICS_ENABLED` | `true` | Exposes `/metrics`. |
 | `NOTIFY_WEBHOOK_URL` | — | POST target for failure notifications. |

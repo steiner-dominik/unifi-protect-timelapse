@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -126,11 +128,25 @@ func Roots(cfg *config.Config) []string {
 	return roots
 }
 
+// Date directory names, so that anything else in the archive is ignored. NAS
+// shares routinely contain directories like @eaDir, #recycle or .snapshot, and
+// several of those sort above a four digit year in byte order.
+var (
+	yearDir  = regexp.MustCompile(`^\d{4}$`)
+	monthDir = regexp.MustCompile(`^\d{4}-\d{2}$`)
+	dayDir   = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+)
+
+// levels is the directory pattern at each depth of the archive layout.
+var levels = []*regexp.Regexp{yearDir, monthDir, dayDir}
+
 // NewestFrame returns the path and modification time of the most recent image
 // across the configured roots.
 //
-// It descends into only the newest year, then month, then day rather than
-// walking the tree, which keeps it cheap over NFS even with a decade of images.
+// It walks newest-first and backtracks, rather than committing to the single
+// newest directory at each level. Committing meant one empty or unrelated
+// directory made the whole archive look empty, which the health check then read
+// as a failure.
 func NewestFrame(cfg *config.Config) (string, time.Time, error) {
 	var (
 		bestPath string
@@ -138,32 +154,9 @@ func NewestFrame(cfg *config.Config) (string, time.Time, error) {
 	)
 
 	for _, root := range Roots(cfg) {
-		dir := root
-		// Three levels: YYYY / YYYY-MM / YYYY-MM-DD.
-		for range 3 {
-			sub, ok := newestSubdir(dir)
-			if !ok {
-				break
-			}
-			dir = sub
-		}
-
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".jpg") {
-				continue
-			}
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			if info.ModTime().After(bestAt) {
-				bestAt = info.ModTime()
-				bestPath = filepath.Join(dir, entry.Name())
-			}
+		path, at, ok := newestUnder(root, 0)
+		if ok && at.After(bestAt) {
+			bestPath, bestAt = path, at
 		}
 	}
 
@@ -173,25 +166,66 @@ func NewestFrame(cfg *config.Config) (string, time.Time, error) {
 	return bestPath, bestAt, nil
 }
 
-// newestSubdir returns the lexically greatest subdirectory, which for the
-// zero-padded YYYY / YYYY-MM / YYYY-MM-DD layout is also the most recent.
-func newestSubdir(dir string) (string, bool) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", false
+// newestUnder searches dir for the most recent image, descending through the
+// date directories newest-first and giving up on a branch that holds nothing.
+//
+// maxBranches bounds the backtracking: a handful of empty directories is normal
+// and worth stepping over, but an archive full of unrelated directories should
+// not turn this into a full tree walk on every probe.
+func newestUnder(dir string, depth int) (string, time.Time, bool) {
+	if depth >= len(levels) {
+		return newestImageIn(dir)
 	}
 
-	best := ""
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+
+	var names []string
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if entry.IsDir() && levels[depth].MatchString(entry.Name()) {
+			names = append(names, entry.Name())
+		}
+	}
+	// Zero padded date names sort chronologically, so newest is last.
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+
+	const maxBranches = 8
+	for i, name := range names {
+		if i >= maxBranches {
+			break
+		}
+		if path, at, ok := newestUnder(filepath.Join(dir, name), depth+1); ok {
+			return path, at, true
+		}
+	}
+	return "", time.Time{}, false
+}
+
+// newestImageIn returns the most recently modified JPEG directly inside dir.
+func newestImageIn(dir string) (string, time.Time, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+
+	var (
+		bestPath string
+		bestAt   time.Time
+	)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".jpg") {
 			continue
 		}
-		if name := entry.Name(); name > best {
-			best = name
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(bestAt) {
+			bestAt = info.ModTime()
+			bestPath = filepath.Join(dir, entry.Name())
 		}
 	}
-	if best == "" {
-		return "", false
-	}
-	return filepath.Join(dir, best), true
+	return bestPath, bestAt, bestPath != ""
 }

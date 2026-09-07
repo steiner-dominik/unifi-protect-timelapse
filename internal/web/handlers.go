@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/archive"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/config"
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/health"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/metrics"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/state"
 )
@@ -429,74 +429,17 @@ func (s *Server) archiveStale(data state.Data) bool {
 	return time.Since(data.ArchiveNewestAt) > s.cfg.Monitor.ArchiveMaxAge
 }
 
-// Healthy reports whether the service is doing its job, which depends on what
-// it was asked to do.
-//
-// A capturing deployment is healthy while frames keep being written. A watchdog
-// deployment captures nothing, so it is healthy while the camera answers and
-// images keep appearing in the archive. This is the signal the Docker health
-// check and the Home Assistant watchdog both use, and it exists because the
-// setup this replaces failed silently for weeks when the camera's IP changed.
+// Healthy reports whether the service is doing its job. The decision lives in
+// the health package so this endpoint, the container health check and the Home
+// Assistant watchdog cannot drift apart.
 func (s *Server) Healthy() (bool, string) {
 	now := time.Now().In(s.cfg.Location)
-	data := s.store.Get()
-
-	if !s.scheduler.Active(now) {
-		return true, "outside the capture window"
-	}
-	// Give the service one grace period after start before judging it.
-	if time.Since(startedAt) < s.startupGrace() {
-		return true, "starting up"
-	}
-
-	if s.cfg.Capture.Enabled {
-		switch {
-		case data.LastCaptureSuccess.IsZero():
-			return false, "no successful capture since start"
-		case time.Since(data.LastCaptureSuccess) > 2*s.cfg.Capture.Interval:
-			return false, fmt.Sprintf("last successful capture was %s ago",
-				time.Since(data.LastCaptureSuccess).Truncate(time.Second))
-		case data.FrameFrozen:
-			return false, fmt.Sprintf("the camera has returned %d identical frames in a row",
-				data.IdenticalCount)
-		}
-	}
-
-	if s.cfg.Monitor.Enabled {
-		if !data.LastProbeAt.IsZero() && !data.CameraOnline {
-			return false, "the camera is not reachable"
-		}
-		if s.archiveStale(data) {
-			return false, fmt.Sprintf("no new image in the archive for %s",
-				time.Since(data.ArchiveNewestAt).Truncate(time.Second))
-		}
-	}
-
-	if !s.cfg.Capture.Enabled && !s.cfg.Monitor.Enabled {
-		return true, "neither capture nor monitoring is enabled"
-	}
-	return true, "ok"
+	verdict := health.Evaluate(s.cfg, s.store.Get(), s.scheduler.Active(now), time.Since(startedAt))
+	return verdict.Healthy, verdict.Reason
 }
 
-// startupGrace is how long after start the service is given before it can
-// report unhealthy, sized to whichever loop is slowest.
-//
-// Only the loops that actually run count: a watchdog deployment has no capture
-// interval to wait for, and taking one into account would leave it reporting
-// "starting up" long after it had a real answer.
-func (s *Server) startupGrace() time.Duration {
-	var grace time.Duration
-	if s.cfg.Capture.Enabled {
-		grace = 2 * s.cfg.Capture.Interval
-	}
-	if s.cfg.Monitor.Enabled {
-		grace = max(grace, 2*s.cfg.Monitor.Interval)
-	}
-	if grace <= 0 {
-		grace = time.Minute
-	}
-	return grace
-}
+// startupGrace is exposed for tests and mirrors the health package.
+func (s *Server) startupGrace() time.Duration { return health.StartupGrace(s.cfg) }
 
 func writeArchiveError(w http.ResponseWriter, err error) {
 	switch {
