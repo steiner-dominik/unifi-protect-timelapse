@@ -100,6 +100,13 @@ All configuration is read from the environment; see README.md.
 
 // setup performs the initialisation every command shares.
 func setup() (*config.Config, *slog.Logger, *state.Store, error) {
+	// Running as a Home Assistant add-on, the Supervisor supplies configuration
+	// as a JSON file rather than environment variables. Applying it first lets
+	// everything below stay identical to the plain container case.
+	if err := config.LoadAddonOptions(config.OptionsPath); err != nil {
+		return nil, nil, nil, err
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("invalid configuration:\n%w", err)
@@ -358,6 +365,9 @@ func runListCameras() error {
 // writing frames, while a watchdog instance must be seeing a reachable camera
 // and a fresh archive.
 func runHealthcheck() error {
+	if err := config.LoadAddonOptions(config.OptionsPath); err != nil {
+		return err
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err

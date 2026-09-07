@@ -44,7 +44,9 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -race -coverprofile=coverage.out ./...
+        # Shuffled so a test that leaks state into the next one fails here
+        # rather than mysteriously later.
+        run: go test -race -shuffle=on -coverprofile=coverage.out ./...
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
