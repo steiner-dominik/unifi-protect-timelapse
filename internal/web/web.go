@@ -55,6 +55,8 @@ type Server struct {
 	// web package does not depend on the monitor package.
 	newestFrame func() (string, time.Time, error)
 
+	clientErrors clientErrorLimiter
+
 	static  fs.FS
 	i18n    fs.FS
 	langs   []string
@@ -158,6 +160,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/languages", s.handleLanguages)
 	mux.HandleFunc("GET /api/i18n/{lang}", s.handleTranslation)
 	mux.HandleFunc("GET /api/latest.jpg", s.handleLatest)
+	mux.HandleFunc("POST /api/client-error", s.handleClientError)
 	mux.HandleFunc("GET /api/live.jpg", s.handleLive)
 
 	if s.cfg.Web.ArchiveEnabled {

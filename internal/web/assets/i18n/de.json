@@ -27,7 +27,12 @@
     "badgeArchived": "archiviertes Bild",
     "badgePreview": "Live-Vorschau",
     "badgeLoading": "wird geladen",
-    "badgeError": "Kamera nicht erreichbar"
+    "badgeError": "Kamera nicht erreichbar",
+    "noImage": "Noch kein Bild verfügbar.",
+    "archiveMissing": "Das Archivverzeichnis wurde nicht gefunden. Prüfen Sie, ob die Freigabe eingebunden und der Pfad korrekt ist.",
+    "archiveUnreadable": "Das Archivverzeichnis kann nicht gelesen werden. Prüfen Sie die Berechtigungen.",
+    "archiveEmpty": "Im Archiv sind noch keine Bilder. Sie erscheinen hier, sobald sie geschrieben werden.",
+    "badgeNoImage": "kein Bild"
   },
   "archive": {
     "heading": "Archiv durchsuchen",
@@ -125,6 +130,12 @@
     "archiveNewestFile": "Neueste Datei",
     "archiveMaxAge": "Grenzwert für Veralterung",
     "frameFrozen": "Kamera eingefroren",
-    "identicalFrames": "Identische Bilder in Folge"
+    "identicalFrames": "Identische Bilder in Folge",
+    "archiveState": "Archiv",
+    "archiveError": "Archivproblem",
+    "archive_ok": "lesbar",
+    "archive_missing": "Verzeichnis nicht gefunden",
+    "archive_unreadable": "nicht lesbar",
+    "archive_empty": "noch keine Bilder"
   }
 }

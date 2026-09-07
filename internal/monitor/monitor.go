@@ -9,6 +9,8 @@ package monitor
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -24,6 +26,54 @@ import (
 
 // ErrNoArchive reports that no archived image exists yet.
 var ErrNoArchive = errors.New("no archived image found")
+
+// ArchiveState describes why the archive does or does not have images. An
+// empty panel is otherwise indistinguishable from a wrong path, which is the
+// single most confusing thing about a deployment that only watches.
+type ArchiveState string
+
+const (
+	// ArchiveOK means images were found.
+	ArchiveOK ArchiveState = "ok"
+	// ArchiveMissing means the configured directory does not exist.
+	ArchiveMissing ArchiveState = "missing"
+	// ArchiveUnreadable means it exists but cannot be listed.
+	ArchiveUnreadable ArchiveState = "unreadable"
+	// ArchiveEmpty means it is readable but holds no images.
+	ArchiveEmpty ArchiveState = "empty"
+)
+
+// Inspect reports what is actually wrong with the archive directory, so the
+// answer can be logged and shown rather than left as a dash in the interface.
+func Inspect(cfg *config.Config) (ArchiveState, string) {
+	dir := cfg.Sync.ArchiveDir
+	if dir == "" {
+		return ArchiveEmpty, "no archive directory is configured"
+	}
+
+	info, err := os.Stat(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return ArchiveMissing, fmt.Sprintf(
+			"%s does not exist; check that the share is mounted and the path is correct", dir)
+	case errors.Is(err, fs.ErrPermission):
+		return ArchiveUnreadable, fmt.Sprintf("%s cannot be read: permission denied", dir)
+	case err != nil:
+		return ArchiveUnreadable, fmt.Sprintf("%s cannot be read: %v", dir, err)
+	case !info.IsDir():
+		return ArchiveUnreadable, fmt.Sprintf("%s is not a directory", dir)
+	}
+
+	if _, err := os.ReadDir(dir); err != nil {
+		return ArchiveUnreadable, fmt.Sprintf("%s cannot be listed: %v", dir, err)
+	}
+
+	if _, _, err := NewestFrame(cfg); err != nil {
+		return ArchiveEmpty, fmt.Sprintf(
+			"%s holds no images in the expected YYYY/YYYY-MM/YYYY-MM-DD layout", dir)
+	}
+	return ArchiveOK, ""
+}
 
 // Monitor probes the camera and the archive.
 type Monitor struct {
@@ -102,10 +152,36 @@ func (m *Monitor) probeCamera(ctx context.Context) {
 }
 
 // probeArchive records the newest image present, so staleness can be judged
-// without the monitor having captured anything.
+// without the monitor having captured anything, and reports why there is
+// nothing when there is nothing.
 func (m *Monitor) probeArchive() {
+	archiveState, detail := Inspect(m.cfg)
+
+	var previous state.Data
+	m.store.Update(func(d *state.Data) {
+		previous = *d
+		d.ArchiveState = string(archiveState)
+		d.ArchiveError = detail
+	})
+
+	// Logged on change only, so a persistent misconfiguration says its piece
+	// once rather than on every probe.
+	if previous.ArchiveState != string(archiveState) {
+		switch archiveState {
+		case ArchiveOK:
+			m.log.Info("archive is readable", "dir", m.cfg.Sync.ArchiveDir)
+		default:
+			m.log.Error("the archive has no usable images",
+				"state", archiveState, "detail", detail)
+		}
+	}
+
 	path, modTime, err := NewestFrame(m.cfg)
 	if err != nil {
+		m.store.Update(func(d *state.Data) {
+			d.ArchiveNewestAt = time.Time{}
+			d.ArchiveNewest = ""
+		})
 		return
 	}
 	m.store.Update(func(d *state.Data) {

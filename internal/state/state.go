@@ -52,6 +52,10 @@ type Data struct {
 	CameraOnline    bool      `json:"cameraOnline"`
 	ArchiveNewestAt time.Time `json:"archiveNewestAt"`
 	ArchiveNewest   string    `json:"archiveNewest"`
+	// ArchiveState and ArchiveError say why there are no images, so an empty
+	// panel can be told apart from a wrong path.
+	ArchiveState string `json:"archiveState"`
+	ArchiveError string `json:"archiveError"`
 
 	// Frozen-frame detection. A camera can answer with the same bytes forever;
 	// counting identical frames in a row is what catches that.

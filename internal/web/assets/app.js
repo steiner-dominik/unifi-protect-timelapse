@@ -29,6 +29,37 @@ const STORAGE = {
 let messages = {};
 let status = null;
 
+/* ------------------------------------------------------- error reporting */
+
+/**
+ * Sends a frontend failure to the server so it lands in the service log.
+ *
+ * Someone running this in a container has the log and nothing else; a browser
+ * console they never open is not a diagnostic. Failures are reported at most
+ * once every few seconds so a repeating fault cannot flood anything.
+ */
+let lastReportAt = 0;
+
+function reportError(context, error) {
+  const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  console.error(context, error);
+
+  const now = Date.now();
+  if (now - lastReportAt < 5000) return;
+  lastReportAt = now;
+
+  try {
+    void fetch(url("/api/client-error"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ context, detail, page: location.pathname }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* Reporting must never itself break the page. */
+  }
+}
+
 /* ------------------------------------------------------------------ helpers */
 
 const $ = (id) => document.getElementById(id);
@@ -194,15 +225,69 @@ function showView(name) {
 
 /* --------------------------------------------------------------- live view */
 
+/** Shows an image, replacing the empty-state placeholder. */
+function showImage(src) {
+  const image = $("live-image");
+  image.src = src;
+  image.hidden = false;
+  $("live-placeholder").hidden = true;
+}
+
+/** Shows the empty state, with an explanation of why there is no image. */
+function showPlaceholder(messageKey) {
+  const image = $("live-image");
+  image.hidden = true;
+  image.removeAttribute("src");
+  const placeholder = $("live-placeholder");
+  placeholder.textContent = t(messageKey, "No image available yet.");
+  placeholder.hidden = false;
+}
+
 /** Reloads the last captured frame. A cache-busting parameter is required
  *  because the file is replaced in place on every capture. */
-function reloadLatest() {
-  const image = $("live-image");
-  image.src = url(`/api/latest.jpg?t=${Date.now()}`);
-  setLiveBadge("live.badgeArchived", "ok");
-  const captured = status?.capture?.latestCapturedAt ?? status?.monitor?.archiveNewestAt;
-  const filename = status?.capture?.latestFilename || status?.monitor?.archiveNewest;
-  renderLiveCaption(captured, filename);
+async function reloadLatest() {
+  // Fetched rather than assigned to img.src so a missing image becomes an
+  // explanation instead of a broken image icon.
+  try {
+    const response = await fetch(url(`/api/latest.jpg?t=${Date.now()}`));
+    if (response.status === 404) {
+      showPlaceholder(archiveHint());
+      setLiveBadge("live.badgeNoImage", "warn");
+      renderLiveCaption(null, null);
+      return;
+    }
+    if (!response.ok) throw new Error(`latest image responded ${response.status}`);
+
+    const blob = await response.blob();
+    const image = $("live-image");
+    if (image.dataset.objectUrl) URL.revokeObjectURL(image.dataset.objectUrl);
+    const objectUrl = URL.createObjectURL(blob);
+    image.dataset.objectUrl = objectUrl;
+    showImage(objectUrl);
+
+    setLiveBadge("live.badgeArchived", "ok");
+    const captured = status?.capture?.latestCapturedAt ?? status?.monitor?.archiveNewestAt;
+    const filename = status?.capture?.latestFilename || status?.monitor?.archiveNewest;
+    renderLiveCaption(captured, filename);
+  } catch (error) {
+    showPlaceholder("live.noImage");
+    setLiveBadge("live.badgeError", "error");
+    reportError("loading the last capture failed", error);
+  }
+}
+
+/** Picks the placeholder text that explains why the archive has no image. */
+function archiveHint() {
+  switch (status?.monitor?.archiveState) {
+    case "missing":
+      return "live.archiveMissing";
+    case "unreadable":
+      return "live.archiveUnreadable";
+    case "empty":
+      return "live.archiveEmpty";
+    default:
+      return "live.noImage";
+  }
 }
 
 async function loadPreview() {
@@ -211,20 +296,27 @@ async function loadPreview() {
   setLiveBadge("live.badgeLoading", null);
   try {
     const response = await fetch(url(`/api/live.jpg?t=${Date.now()}`));
-    if (!response.ok) throw new Error(String(response.status));
+    if (!response.ok) {
+      throw new Error(`live preview responded ${response.status}`);
+    }
 
     const blob = await response.blob();
     const image = $("live-image");
-    // Release the previous object URL so repeated previews do not leak.
+    // Release the previous object URL so repeated previews do not leak. Note
+    // the name: a local `url` here would shadow the helper above for the whole
+    // function and make the fetch throw before it ever runs.
     if (image.dataset.objectUrl) URL.revokeObjectURL(image.dataset.objectUrl);
-    const url = URL.createObjectURL(blob);
-    image.dataset.objectUrl = url;
-    image.src = url;
+    const objectUrl = URL.createObjectURL(blob);
+    image.dataset.objectUrl = objectUrl;
+    showImage(objectUrl);
 
     setLiveBadge("live.badgePreview", "warn");
     renderLiveCaption(new Date().toISOString(), t("live.notSaved", "not saved"));
-  } catch {
+  } catch (error) {
     setLiveBadge("live.badgeError", "error");
+    // Without this the failure is visible only in the browser console, which
+    // is not where anyone running this looks.
+    reportError("live preview failed", error);
   } finally {
     button.disabled = false;
   }
@@ -556,6 +648,14 @@ function renderStatus(data) {
         tone: monitor.archiveStale ? "error" : null,
       },
       { key: "monitor.archiveNewestFile", value: monitor.archiveNewest },
+      {
+        key: "monitor.archiveState",
+        value: monitor.archiveState
+          ? t(`monitor.archive_${monitor.archiveState}`, monitor.archiveState)
+          : null,
+        tone: monitor.archiveState && monitor.archiveState !== "ok" ? "error" : "ok",
+      },
+      { key: "monitor.archiveError", value: monitor.archiveError, tone: "error" },
       { key: "monitor.archiveMaxAge", value: monitor.archiveMaxAge },
       {
         key: "monitor.frameFrozen",
@@ -604,7 +704,10 @@ function renderStatus(data) {
     $("brand-subtitle").textContent = config.siteName;
   }
 
-  if (!$("live-image").src) reloadLatest();
+  if (!$("live-image").src && !$("live-image").dataset.checked) {
+    $("live-image").dataset.checked = "1";
+    void reloadLatest();
+  }
 }
 
 function yesNo(value) {
@@ -640,7 +743,7 @@ async function main() {
   }
   showView(readStored(STORAGE.view) ?? "live");
 
-  $("btn-reload").addEventListener("click", reloadLatest);
+  $("btn-reload").addEventListener("click", () => void reloadLatest());
   $("btn-preview").addEventListener("click", () => void loadPreview());
 
   $("sel-year").addEventListener("change", (event) => void loadMonths(event.target.value));
@@ -671,8 +774,16 @@ async function main() {
 
   // Refresh the archived frame shortly after each expected capture.
   window.setInterval(() => {
-    if (!$("view-live").hidden && !$("live-image").dataset.objectUrl) reloadLatest();
+    if (!$("view-live").hidden && !status?.capture?.active) return;
+    if (!$("view-live").hidden) void reloadLatest();
   }, 60_000);
+
+  window.addEventListener("error", (event) => {
+    reportError("uncaught error", event.error ?? event.message);
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    reportError("unhandled promise rejection", event.reason);
+  });
 
   registerServiceWorker();
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -265,5 +266,80 @@ func TestNewestFrameStillReportsAGenuinelyEmptyArchive(t *testing.T) {
 	}
 	if _, _, err := NewestFrame(cfg); !errors.Is(err, ErrNoArchive) {
 		t.Fatalf("expected ErrNoArchive, got %v", err)
+	}
+}
+
+// An empty panel must be distinguishable from a wrong path, which is the single
+// most confusing thing about a deployment that only watches.
+func TestInspectDistinguishesArchiveProblems(t *testing.T) {
+	_, cfg, _ := newTestMonitor(t, nil)
+
+	// Configured but absent.
+	cfg.Sync.ArchiveDir = filepath.Join(t.TempDir(), "not-mounted")
+	archiveState, detail := Inspect(cfg)
+	if archiveState != ArchiveMissing {
+		t.Errorf("state = %q, want %q", archiveState, ArchiveMissing)
+	}
+	if !strings.Contains(detail, "does not exist") || !strings.Contains(detail, "not-mounted") {
+		t.Errorf("detail should name the path and the problem, got %q", detail)
+	}
+
+	// Present but holding nothing.
+	cfg.Sync.ArchiveDir = t.TempDir()
+	if archiveState, detail = Inspect(cfg); archiveState != ArchiveEmpty {
+		t.Errorf("state = %q, want %q (%s)", archiveState, ArchiveEmpty, detail)
+	}
+
+	// A file where a directory belongs.
+	file := filepath.Join(t.TempDir(), "afile")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg.Sync.ArchiveDir = file
+	if archiveState, _ = Inspect(cfg); archiveState != ArchiveUnreadable {
+		t.Errorf("state = %q, want %q", archiveState, ArchiveUnreadable)
+	}
+
+	// Holding an image.
+	cfg.Sync.ArchiveDir = t.TempDir()
+	writeArchiveFrame(t, cfg.Sync.ArchiveDir, "2026-09-07",
+		"snapshot_2026-09-07-05-00-00.jpg", time.Now())
+	if archiveState, detail = Inspect(cfg); archiveState != ArchiveOK {
+		t.Errorf("state = %q, want %q (%s)", archiveState, ArchiveOK, detail)
+	}
+}
+
+func TestProbeRecordsTheArchiveProblem(t *testing.T) {
+	m, cfg, store := newTestMonitor(t, nil)
+	cfg.Sync.ArchiveDir = filepath.Join(t.TempDir(), "not-mounted")
+
+	m.Probe(context.Background())
+
+	data := store.Get()
+	if data.ArchiveState != string(ArchiveMissing) {
+		t.Errorf("ArchiveState = %q, want %q", data.ArchiveState, ArchiveMissing)
+	}
+	if data.ArchiveError == "" {
+		t.Error("the reason should be recorded so it can be shown and logged")
+	}
+}
+
+// A vanished archive must not leave a stale timestamp behind, or staleness
+// would be judged against an image that is no longer reachable.
+func TestProbeClearsTheNewestImageWhenTheArchiveGoesAway(t *testing.T) {
+	m, cfg, store := newTestMonitor(t, nil)
+	writeArchiveFrame(t, cfg.Sync.ArchiveDir, "2026-09-07",
+		"snapshot_2026-09-07-05-00-00.jpg", time.Now())
+
+	m.Probe(context.Background())
+	if store.Get().ArchiveNewest == "" {
+		t.Fatal("expected the frame to be recorded")
+	}
+
+	cfg.Sync.ArchiveDir = filepath.Join(t.TempDir(), "gone")
+	m.Probe(context.Background())
+
+	if data := store.Get(); data.ArchiveNewest != "" || !data.ArchiveNewestAt.IsZero() {
+		t.Errorf("stale archive details survived: %q at %v", data.ArchiveNewest, data.ArchiveNewestAt)
 	}
 }

@@ -160,6 +160,7 @@ of problem, and each one feeds the health check, the metrics and the UI.
 | Frozen frames | The camera answers, with the same bytes, forever |
 | Archive freshness | Images are being captured but not landing in the archive |
 | Gap detection | Stretches of a past day where images are missing |
+| Archive reachability | The archive path is missing, unreadable or empty |
 
 Frozen-frame detection compares each frame with its predecessor;
 `FROZEN_FRAME_THRESHOLD` identical frames in a row is treated as a dead camera.
@@ -386,6 +387,14 @@ docker inspect --format '{{.State.Health.Status}}' timelapse
 
 A rising `timelapse_spool_files` with `timelapse_archive_available` at 0 is the
 signature of a NAS outage — a normal, handled condition, not an emergency.
+
+### Frontend errors
+
+A browser console is not a diagnostic for something running in a container, so
+the page reports its own failures — uncaught errors, unhandled rejections and
+handled ones — to `/api/client-error`, which writes them to the service log
+alongside everything else. The endpoint is rate limited, size capped, and only
+ever logs.
 
 ### Failure webhook
 

@@ -324,6 +324,20 @@ main {
   background: var(--surface-2);
 }
 
+/* Stands in for the image so an empty archive shows a sentence rather than a
+   broken image icon. */
+.placeholder {
+  margin: 0;
+  aspect-ratio: 4 / 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 1.5rem;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
 .viewer-caption {
   padding: 0.55rem 0.7rem;
   font-size: 0.8rem;

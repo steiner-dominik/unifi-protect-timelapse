@@ -52,6 +52,8 @@ type MonitorStatus struct {
 	SourceInUse     string     `json:"sourceInUse"`
 	ArchiveNewest   string     `json:"archiveNewest"`
 	ArchiveNewestAt *time.Time `json:"archiveNewestAt"`
+	ArchiveState    string     `json:"archiveState"`
+	ArchiveError    string     `json:"archiveError"`
 	ArchiveStale    bool       `json:"archiveStale"`
 	ArchiveMaxAge   string     `json:"archiveMaxAge"`
 	FrameFrozen     bool       `json:"frameFrozen"`
@@ -173,6 +175,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		SourceInUse:     data.CameraLastUsed,
 		ArchiveNewest:   data.ArchiveNewest,
 		ArchiveNewestAt: optionalTime(data.ArchiveNewestAt),
+		ArchiveState:    data.ArchiveState,
+		ArchiveError:    data.ArchiveError,
 		ArchiveStale:    s.archiveStale(data),
 		ArchiveMaxAge:   s.cfg.Monitor.ArchiveMaxAge.String(),
 		FrameFrozen:     data.FrameFrozen,
@@ -245,7 +249,10 @@ func (s *Server) handleLatest(w http.ResponseWriter, r *http.Request) {
 		if s.latestFromArchive(w, r) {
 			return
 		}
-		http.Error(w, "no image captured yet", http.StatusNotFound)
+		if data := s.store.Get(); data.ArchiveError != "" {
+			s.log.Debug("no image to serve", "reason", data.ArchiveError)
+		}
+		http.Error(w, "no image available", http.StatusNotFound)
 		return
 	}
 	defer func() { _ = file.Close() }()
@@ -285,9 +292,10 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 	data, err := s.capturer.Live(ctx)
 	if err != nil {
 		s.log.Warn("live preview failed", "error", err)
-		http.Error(w, "camera did not return an image", http.StatusBadGateway)
+		http.Error(w, "camera did not return an image: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	s.log.Debug("live preview served", "bytes", len(data))
 
 	now := time.Now()
 	s.liveMu.Lock()

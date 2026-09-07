@@ -8,6 +8,48 @@ matching add-on bump in
 [home-assistant-apps](https://github.com/steiner-dominik/home-assistant-apps) —
 publish the release here first.
 
+## 26.09.05
+
+### Fixed
+
+- **The live preview always failed with "camera unreachable", whatever the
+  camera was doing.** Adding ingress support in 26.09.02 introduced a
+  module-level `url()` helper, and the preview function already had a local
+  variable of the same name. A local declaration shadows the outer name for the
+  whole function, so the helper was in its temporal dead zone and threw before
+  the request was ever made. The `catch` turned that into a camera error. The
+  server was answering correctly the entire time, which is why nothing appeared
+  in the log. A test now fails if any function shadows the helper again.
+
+- **A missing image showed a broken image icon.** The live view now fetches the
+  image rather than assigning it to `src`, and renders an explanation instead:
+  whether the archive directory is missing, unreadable, or simply has no images
+  yet.
+
+### Added
+
+- **The archive is diagnosed rather than left blank.** Its state is checked at
+  startup and on every probe and reported as `ok`, `missing`, `unreadable` or
+  `empty`, with the path and what to check. It appears in the log, in
+  `/api/status`, and on both the Live and Status tabs. An empty panel used to be
+  indistinguishable from a wrong path.
+
+- **Frontend failures are reported to the service log.** Anyone running this in
+  a container has the log and nothing else, and a browser console they never
+  open is not a diagnostic. The page now posts uncaught errors, unhandled
+  rejections and handled failures to `/api/client-error`, which logs them. The
+  endpoint is rate limited and size capped, and only ever writes to the log.
+
+- The live preview endpoint now includes the underlying error in its response,
+  and logs when it serves a frame.
+
+### Note
+
+An archive problem is deliberately **not** unhealthy. It is loud in the log and
+in the interface, but it does not restart the container, because a health check
+that restarts a service over a configuration mistake produces exactly the silent
+restart loop fixed in 26.09.04.
+
 ## 26.09.04
 
 ### Fixed

@@ -27,7 +27,12 @@
     "badgeArchived": "archived frame",
     "badgePreview": "live preview",
     "badgeLoading": "loading",
-    "badgeError": "camera unreachable"
+    "badgeError": "camera unreachable",
+    "noImage": "No image available yet.",
+    "archiveMissing": "The archive directory was not found. Check that the share is mounted and the path is correct.",
+    "archiveUnreadable": "The archive directory cannot be read. Check its permissions.",
+    "archiveEmpty": "The archive holds no images yet. They appear here once something writes them.",
+    "badgeNoImage": "no image"
   },
   "archive": {
     "heading": "Browse the archive",
@@ -125,6 +130,12 @@
     "archiveNewestFile": "Newest file",
     "archiveMaxAge": "Staleness limit",
     "frameFrozen": "Camera frozen",
-    "identicalFrames": "Identical frames in a row"
+    "identicalFrames": "Identical frames in a row",
+    "archiveState": "Archive",
+    "archiveError": "Archive problem",
+    "archive_ok": "readable",
+    "archive_missing": "directory not found",
+    "archive_unreadable": "cannot be read",
+    "archive_empty": "no images yet"
   }
 }

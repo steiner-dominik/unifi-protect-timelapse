@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -304,5 +305,116 @@ func TestStatusCarriesTheServerHealthVerdict(t *testing.T) {
 	}
 	if payload.Health.Healthy {
 		t.Error("an unreachable camera should make the watchdog unhealthy")
+	}
+}
+
+// The frontend helper that builds same-origin URLs is named `url`. A local
+// variable of the same name inside a function shadows it for that whole
+// function, so the helper throws before it is ever called. That is exactly how
+// the live preview broke: it reported "camera unreachable" while the server was
+// answering perfectly.
+func TestNoFunctionShadowsTheUrlHelper(t *testing.T) {
+	raw, err := fs.ReadFile(assets, "assets/app.js")
+	if err != nil {
+		t.Fatalf("reading app.js: %v", err)
+	}
+	source := string(raw)
+
+	declaration := regexp.MustCompile(`(?m)^\s+(?:const|let|var)\s+url\s*=`)
+	if loc := declaration.FindStringIndex(source); loc != nil {
+		line := 1 + strings.Count(source[:loc[0]], "\n")
+		t.Errorf("app.js line %d declares a local `url`, which shadows the url() helper "+
+			"for its whole function; name it something else", line)
+	}
+}
+
+// Frontend faults are invisible to whoever reads the container log unless they
+// are reported back.
+func TestClientErrorEndpointLogsAndAccepts(t *testing.T) {
+	server, _ := newTestServer(t, "")
+
+	body := strings.NewReader(`{"context":"live preview failed","detail":"TypeError: boom","page":"/"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/client-error", body)
+	req.Header.Set("Content-Type", "application/json")
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Errorf("client error report = %d, want 204", recorder.Code)
+	}
+}
+
+// It is an unauthenticated write in the default configuration, so a repeating
+// fault must not be able to flood the log.
+func TestClientErrorEndpointIsRateLimited(t *testing.T) {
+	server, _ := newTestServer(t, "")
+	handler := server.Handler()
+
+	accepted := 0
+	for range 20 {
+		req := httptest.NewRequest(http.MethodPost, "/api/client-error",
+			strings.NewReader(`{"context":"x","detail":"y"}`))
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		if recorder.Code == http.StatusNoContent {
+			accepted++
+		}
+	}
+	// Every call is answered; the limiter governs how many reach the log, and
+	// the endpoint must never reject or the browser would retry.
+	if accepted != 20 {
+		t.Errorf("every report should be accepted, got %d of 20", accepted)
+	}
+}
+
+// A body larger than the cap must not be buffered whole.
+func TestClientErrorEndpointCapsTheBody(t *testing.T) {
+	server, _ := newTestServer(t, "")
+	huge := strings.Repeat("a", 1<<20)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/client-error",
+		strings.NewReader(`{"detail":"`+huge+`"}`))
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Errorf("oversized report = %d, want 204", recorder.Code)
+	}
+}
+
+// The status must carry the reason there is no image, or the panel can only
+// show a dash.
+func TestStatusCarriesTheArchiveState(t *testing.T) {
+	server, cfg := newTestServer(t, "")
+	cfg.Sync.ArchiveDir = filepath.Join(t.TempDir(), "not-mounted")
+
+	server.store.Update(func(d *state.Data) {
+		d.ArchiveState = "missing"
+		d.ArchiveError = "/media/timelapse does not exist"
+	})
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"archiveState":"missing"`) {
+		t.Errorf("status should carry the archive state:\n%s", body)
+	}
+	if !strings.Contains(body, "does not exist") {
+		t.Error("status should carry the reason")
+	}
+}
+
+// With nothing to show, the endpoint must 404 so the frontend can render an
+// explanation instead of a broken image.
+func TestLatestReturnsNotFoundWithNoImage(t *testing.T) {
+	server, _ := newTestServer(t, "")
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/latest.jpg", nil))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("latest.jpg = %d, want 404", recorder.Code)
 	}
 }

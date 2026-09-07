@@ -199,6 +199,18 @@ func run() error {
 			"archive", cfg.Sync.ArchiveDir, "sentinel", cfg.Sync.Sentinel)
 	}
 
+	// Checked and reported at startup rather than left for someone to notice
+	// as an empty panel. A deployment that only watches has nothing else to
+	// show if this is wrong.
+	if archiveState, detail := monitor.Inspect(cfg); archiveState != monitor.ArchiveOK {
+		log.Error("the archive has no usable images",
+			"state", archiveState,
+			"detail", detail,
+			"hint", "point ARCHIVE_DIR at the directory holding the YYYY/YYYY-MM/YYYY-MM-DD tree")
+	} else {
+		log.Info("archive is readable", "dir", cfg.Sync.ArchiveDir)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
