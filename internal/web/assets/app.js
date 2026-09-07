@@ -28,6 +28,7 @@ const STORAGE = {
 /** Current translation dictionary, flattened to dotted keys. */
 let messages = {};
 let status = null;
+let reloadScheduled = false;
 
 /* ------------------------------------------------------- error reporting */
 
@@ -40,19 +41,32 @@ let status = null;
  */
 let lastReportAt = 0;
 
+/** Renders an error for a human, without leaking an object's noise. */
+function describeError(error) {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return String(error);
+}
+
 function reportError(context, error) {
-  const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const detail = describeError(error);
   console.error(context, error);
 
   const now = Date.now();
   if (now - lastReportAt < 5000) return;
   lastReportAt = now;
 
+  const body = JSON.stringify({ context, detail, page: location.pathname });
   try {
+    // sendBeacon survives a page that is unloading, which is when the most
+    // interesting failures happen.
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], { type: "application/json" });
+      if (navigator.sendBeacon(url("/api/client-error"), blob)) return;
+    }
     void fetch(url("/api/client-error"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ context, detail, page: location.pathname }),
+      body,
       keepalive: true,
     }).catch(() => {});
   } catch {
@@ -314,8 +328,9 @@ async function loadPreview() {
     renderLiveCaption(new Date().toISOString(), t("live.notSaved", "not saved"));
   } catch (error) {
     setLiveBadge("live.badgeError", "error");
-    // Without this the failure is visible only in the browser console, which
-    // is not where anyone running this looks.
+    // Shown as well as reported: the person looking at the panel should not
+    // have to open a log to find out what went wrong.
+    renderLiveCaption(null, describeError(error));
     reportError("live preview failed", error);
   } finally {
     button.disabled = false;
@@ -533,10 +548,19 @@ async function refreshStatus() {
   }
   renderStatus(status);
 
-  // The running binary changed underneath a long-lived tab: offer a reload so
-  // no stale asset stays in use.
+  // A panel left open across an update keeps running the old code, and the
+  // symptoms of that are indistinguishable from a server fault: the page
+  // misbehaves in ways the server log knows nothing about. Reload rather than
+  // hope the toast is noticed. There is nothing to lose here — no forms, no
+  // unsaved state.
   if (status.version && VERSION && status.version !== VERSION) {
     $("update-toast").hidden = false;
+    if (!reloadScheduled) {
+      reloadScheduled = true;
+      reportError("stale page reloading",
+        `page is ${VERSION}, server is ${status.version}`);
+      window.setTimeout(() => window.location.reload(), 3000);
+    }
   }
 }
 

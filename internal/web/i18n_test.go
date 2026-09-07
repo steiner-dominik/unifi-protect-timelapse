@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -440,5 +441,61 @@ func TestSameOriginFramingIsAllowed(t *testing.T) {
 	// Cross-origin framing must still be refused.
 	if strings.Contains(csp, "frame-ancestors *") {
 		t.Error("framing should be limited to the same origin")
+	}
+}
+
+// Without request logging there is no way to tell a browser that asked and got
+// an error from one that never asked at all. That ambiguity made a stale cached
+// page look indistinguishable from a server fault.
+func TestFailedRequestsAreLogged(t *testing.T) {
+	var buffer strings.Builder
+	server, _ := newTestServer(t, "")
+	server.log = slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder,
+		httptest.NewRequest(http.MethodGet, "/api/latest.jpg?v=26.09.01", nil))
+
+	logged := buffer.String()
+	if !strings.Contains(logged, "request failed") {
+		t.Errorf("a 404 should be logged:\n%s", logged)
+	}
+	for _, want := range []string{"/api/latest.jpg", "status=404", "assetVersion=26.09.01"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("the log should carry %q:\n%s", want, logged)
+		}
+	}
+}
+
+// Polled endpoints and static assets would drown the log at debug level.
+func TestRoutineRequestsAreNotLogged(t *testing.T) {
+	var buffer strings.Builder
+	server, _ := newTestServer(t, "")
+	server.log = slog.New(slog.NewTextHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	handler := server.Handler()
+
+	for _, path := range []string{"/api/status", "/healthz", "/metrics", "/static/app.css"} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	if logged := buffer.String(); strings.Contains(logged, "msg=request ") {
+		t.Errorf("routine successful requests should stay quiet:\n%s", logged)
+	}
+}
+
+// A panel left open across an update keeps running the old code, and its
+// symptoms are indistinguishable from a server fault.
+func TestStalePageReloadsItself(t *testing.T) {
+	raw, err := fs.ReadFile(assets, "assets/app.js")
+	if err != nil {
+		t.Fatalf("reading app.js: %v", err)
+	}
+	source := string(raw)
+
+	if !strings.Contains(source, "window.location.reload()") {
+		t.Error("a page older than the server should reload itself")
+	}
+	if !strings.Contains(source, "reloadScheduled") {
+		t.Error("the reload must happen once, not on every status poll")
 	}
 }

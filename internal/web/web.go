@@ -186,7 +186,7 @@ func (s *Server) Handler() http.Handler {
 		}
 	}
 
-	return s.securityHeaders(s.authenticate(mux))
+	return s.requestLog(s.securityHeaders(s.authenticate(mux)))
 }
 
 // Run serves until ctx is cancelled, then shuts down gracefully.

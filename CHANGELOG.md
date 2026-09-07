@@ -8,6 +8,34 @@ matching add-on bump in
 [home-assistant-apps](https://github.com/steiner-dominik/home-assistant-apps) —
 publish the release here first.
 
+## 26.09.07
+
+### Fixed
+
+- **A panel left open across an update kept running the old code.** Its symptoms
+  were indistinguishable from a server fault: the page misbehaved in ways the
+  server log knew nothing about, because the failing code was a release or two
+  behind. Notably a page from before 26.09.05 shows "camera unreachable" from
+  the live preview bug fixed then, and has no error reporting, so nothing
+  appears in the log at all. The page now reloads itself once when it notices
+  the server is running a different version, instead of relying on a toast being
+  seen.
+
+### Added
+
+- **HTTP request logging.** Failed requests are logged at warning with method,
+  path, status, size and duration; successful ones at debug, with polled
+  endpoints and static assets excluded so normal operation stays quiet. The
+  asset version from the query string is logged too, so a stale page identifies
+  itself. Without this there was no way to distinguish a browser that asked and
+  got an error from one that never asked at all.
+
+- The live preview shows the actual error in the caption rather than only a red
+  badge, so the reason is on screen and not only in the log.
+
+- Error reports use `sendBeacon` when available, so a failure during page unload
+  still arrives.
+
 ## 26.09.06
 
 ### Fixed
