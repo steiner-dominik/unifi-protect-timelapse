@@ -57,6 +57,10 @@ type Server struct {
 
 	clientErrors clientErrorLimiter
 
+	// networkConflict is computed once at startup; interfaces do not change
+	// under a running container.
+	networkConflict string
+
 	static  fs.FS
 	i18n    fs.FS
 	langs   []string
@@ -85,6 +89,9 @@ type Options struct {
 	// NewestFrame locates the most recent archived image, used as the live
 	// view's source when capture is disabled.
 	NewestFrame func() (string, time.Time, error)
+	// NetworkConflict describes a camera address that sits inside one of this
+	// container's own subnets, if any.
+	NetworkConflict string
 }
 
 // New builds the server and prepares the embedded assets.
@@ -95,18 +102,19 @@ func New(opts Options) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:         opts.Config,
-		store:       opts.State,
-		capturer:    opts.Capturer,
-		syncer:      opts.Syncer,
-		browser:     archive.New(opts.Config),
-		scheduler:   opts.Scheduler,
-		video:       opts.Video,
-		log:         opts.Log,
-		version:     opts.Version,
-		static:      static,
-		proxy:       &http.Client{Timeout: 60 * time.Second},
-		newestFrame: opts.NewestFrame,
+		cfg:             opts.Config,
+		store:           opts.State,
+		capturer:        opts.Capturer,
+		syncer:          opts.Syncer,
+		browser:         archive.New(opts.Config),
+		scheduler:       opts.Scheduler,
+		video:           opts.Video,
+		log:             opts.Log,
+		version:         opts.Version,
+		static:          static,
+		proxy:           &http.Client{Timeout: 60 * time.Second},
+		newestFrame:     opts.NewestFrame,
+		networkConflict: opts.NetworkConflict,
 	}
 
 	// Translations may be overridden from disk so a new language can be added
@@ -231,13 +239,16 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		"manifest-src 'self'; " +
 		"base-uri 'none'; " +
 		"form-action 'none'; " +
-		"frame-ancestors 'none'"
+		// Same-origin framing has to be allowed: Home Assistant serves an
+		// add-on's panel inside an iframe on its own origin, and 'none' left
+		// that panel completely blank.
+		"frame-ancestors 'self'"
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", csp)
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Frame-Options", "SAMEORIGIN")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")

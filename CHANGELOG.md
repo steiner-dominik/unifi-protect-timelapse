@@ -8,6 +8,33 @@ matching add-on bump in
 [home-assistant-apps](https://github.com/steiner-dominik/home-assistant-apps) —
 publish the release here first.
 
+## 26.09.06
+
+### Fixed
+
+- **The Home Assistant panel was blocked from rendering at all.** The service
+  sent `frame-ancestors 'none'` and `X-Frame-Options: DENY`, and an add-on panel
+  is an iframe on Home Assistant's own origin. Both now permit same-origin
+  framing; cross-origin framing is still refused.
+
+### Added
+
+- **`timelapse diagnose`**, which reports why the camera or the archive is
+  unreachable *from inside the container* and then actually tries to fetch a
+  frame. It prints the container's own interfaces and default route, resolves
+  the camera, checks whether that address falls inside one of the container's
+  subnets, inspects the archive, and times a real request.
+
+- **Detection of a camera address that overlaps the container's own network.**
+  Docker allocates bridge networks from `172.17.0.0/12` by default, which is the
+  same private range many LANs use. When a camera falls inside a subnet the
+  container is attached to, the container treats it as a neighbour on its bridge
+  and never routes it out: the camera answers from the host and fails with
+  `no route to host` from inside. Worse, the route is host-wide, so one
+  overlapping network breaks every container on the machine, not only those
+  attached to it. This is now reported at startup, on the status page, and by
+  `diagnose`, with the fix.
+
 ## 26.09.05
 
 ### Fixed

@@ -11,10 +11,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +29,7 @@ import (
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/hass"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/health"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/monitor"
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/netdiag"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/notify"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/schedule"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/state"
@@ -54,6 +57,8 @@ func main() {
 		err = runHealthcheck()
 	case "cameras":
 		err = runListCameras()
+	case "diagnose":
+		err = runDiagnose()
 	case "capture-once":
 		err = runCaptureOnce()
 	case "sync-once":
@@ -71,6 +76,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error: "+err.Error())
 		os.Exit(1)
 	}
+}
+
+// describeConflicts summarises any overlap between the camera address and this
+// container's own networks, for the status page.
+func describeConflicts(cfg *config.Config) string {
+	var described []string
+	for _, host := range cameraHosts(cfg) {
+		for _, conflict := range netdiag.Conflicts(host) {
+			described = append(described, conflict.String())
+		}
+	}
+	return strings.Join(described, "; ")
 }
 
 // describeSource names the camera pipeline, tolerating a deployment that has
@@ -92,6 +109,7 @@ Commands:
   capture-once   Capture a single frame and exit
   sync-once      Run one sync pass and exit
   cameras        List the cameras visible through the Protect integration API
+  diagnose       Report why the camera or archive is unreachable from in here
   healthcheck    Exit non-zero when captures have stopped (used by Docker HEALTHCHECK)
   version        Print the version and exit
 
@@ -120,6 +138,12 @@ func setup() (*config.Config, *slog.Logger, *state.Store, error) {
 		return nil, nil, nil, err
 	}
 	return cfg, log, store, nil
+}
+
+// discardingLogger is used by commands that print their own report and should
+// not interleave it with log lines.
+func discardingLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
 func newLogger(cfg *config.Config) *slog.Logger {
@@ -197,6 +221,17 @@ func run() error {
 	if cfg.SyncEnabled() && !sync.ArchiveAvailable() {
 		log.Warn("archive is not available at startup; images will be buffered locally until it returns",
 			"archive", cfg.Sync.ArchiveDir, "sentinel", cfg.Sync.Sentinel)
+	}
+
+	// A camera inside one of the container's own subnets answers from the host
+	// and times out from in here, which is impossible to guess at from the
+	// error alone.
+	for _, host := range cameraHosts(cfg) {
+		for _, conflict := range netdiag.Conflicts(host) {
+			log.Error("the camera address is inside this container's own network",
+				"detail", conflict.String(),
+				"hint", "run `diagnose`; Docker's default pools cover 172.17.0.0/12, so move them if your LAN overlaps")
+		}
 	}
 
 	// Checked and reported at startup rather than left for someone to notice
@@ -278,6 +313,7 @@ func run() error {
 			NewestFrame: func() (string, time.Time, error) {
 				return monitor.NewestFrame(cfg)
 			},
+			NetworkConflict: describeConflicts(cfg),
 		})
 		if err != nil {
 			return fmt.Errorf("preparing web interface: %w", err)

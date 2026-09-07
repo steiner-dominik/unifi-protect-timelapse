@@ -418,3 +418,27 @@ func TestLatestReturnsNotFoundWithNoImage(t *testing.T) {
 		t.Fatalf("latest.jpg = %d, want 404", recorder.Code)
 	}
 }
+
+// Home Assistant serves an add-on's panel inside an iframe on its own origin.
+// Denying all framing left that panel completely blank.
+func TestSameOriginFramingIsAllowed(t *testing.T) {
+	server, _ := newTestServer(t, "")
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if got := recorder.Header().Get("X-Frame-Options"); got != "SAMEORIGIN" {
+		t.Errorf("X-Frame-Options = %q, want SAMEORIGIN so ingress can embed the panel", got)
+	}
+
+	csp := recorder.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "frame-ancestors 'self'") {
+		t.Errorf("CSP must allow same-origin framing for ingress: %s", csp)
+	}
+	if strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Error("frame-ancestors 'none' blocks the Home Assistant panel entirely")
+	}
+	// Cross-origin framing must still be refused.
+	if strings.Contains(csp, "frame-ancestors *") {
+		t.Error("framing should be limited to the same origin")
+	}
+}

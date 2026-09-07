@@ -136,6 +136,7 @@
     "archive_ok": "lesbar",
     "archive_missing": "Verzeichnis nicht gefunden",
     "archive_unreadable": "nicht lesbar",
-    "archive_empty": "noch keine Bilder"
+    "archive_empty": "noch keine Bilder",
+    "networkConflict": "Netzwerkkonflikt"
   }
 }

@@ -404,9 +404,34 @@ Repeats of the same kind are suppressed for an hour.
 
 ---
 
+## When the camera is unreachable from the container
+
+```bash
+docker compose exec timelapse timelapse diagnose
+```
+
+This is worth running before anything else, because the most confusing failure
+looks like a working camera. Docker allocates bridge networks from
+`172.17.0.0/12` by default, which is the same private range many LANs use. If
+your camera's address falls inside a subnet a container is attached to, the
+container treats it as a neighbour on its own bridge and never routes it to the
+LAN — so it answers from the host and fails with `no route to host` from inside.
+The route is installed host-wide, so a single overlapping network breaks every
+container on the machine, not only the ones attached to it.
+
+`diagnose` prints the container's interfaces and default route, resolves the
+camera, says whether the two overlap, checks the archive, and times a real
+snapshot request. If it reports an overlap, move Docker's pools off your LAN
+range in `/etc/docker/daemon.json` and restart the daemon:
+
+```json
+{ "default-address-pools": [ { "base": "10.201.0.0/16", "size": 24 } ] }
+```
+
 ## Commands
 
 ```bash
+docker compose run --rm timelapse diagnose       # why is the camera unreachable?
 docker compose run --rm timelapse capture-once   # capture one frame and exit
 docker compose run --rm timelapse sync-once      # run one sync pass and exit
 docker compose run --rm timelapse cameras        # list Protect camera IDs

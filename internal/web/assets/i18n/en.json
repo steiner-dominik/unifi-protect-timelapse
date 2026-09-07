@@ -136,6 +136,7 @@
     "archive_ok": "readable",
     "archive_missing": "directory not found",
     "archive_unreadable": "cannot be read",
-    "archive_empty": "no images yet"
+    "archive_empty": "no images yet",
+    "networkConflict": "Network conflict"
   }
 }

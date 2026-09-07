@@ -54,11 +54,15 @@ type MonitorStatus struct {
 	ArchiveNewestAt *time.Time `json:"archiveNewestAt"`
 	ArchiveState    string     `json:"archiveState"`
 	ArchiveError    string     `json:"archiveError"`
-	ArchiveStale    bool       `json:"archiveStale"`
-	ArchiveMaxAge   string     `json:"archiveMaxAge"`
-	FrameFrozen     bool       `json:"frameFrozen"`
-	IdenticalFrames int        `json:"identicalFrames"`
-	VideoAvailable  bool       `json:"videoAvailable"`
+	// NetworkConflict is set when the camera address falls inside one of this
+	// container's own subnets, which makes it unreachable from in here while
+	// answering from the host.
+	NetworkConflict string `json:"networkConflict"`
+	ArchiveStale    bool   `json:"archiveStale"`
+	ArchiveMaxAge   string `json:"archiveMaxAge"`
+	FrameFrozen     bool   `json:"frameFrozen"`
+	IdenticalFrames int    `json:"identicalFrames"`
+	VideoAvailable  bool   `json:"videoAvailable"`
 }
 
 // CaptureStatus describes the capture side of the service.
@@ -177,6 +181,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		ArchiveNewestAt: optionalTime(data.ArchiveNewestAt),
 		ArchiveState:    data.ArchiveState,
 		ArchiveError:    data.ArchiveError,
+		NetworkConflict: s.networkConflict,
 		ArchiveStale:    s.archiveStale(data),
 		ArchiveMaxAge:   s.cfg.Monitor.ArchiveMaxAge.String(),
 		FrameFrozen:     data.FrameFrozen,

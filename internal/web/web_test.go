@@ -88,8 +88,11 @@ func TestSecurityHeadersArePresent(t *testing.T) {
 
 	want := map[string]string{
 		"X-Content-Type-Options": "nosniff",
-		"X-Frame-Options":        "DENY",
-		"Referrer-Policy":        "no-referrer",
+		// Same-origin, not DENY: Home Assistant embeds the panel in an iframe
+		// on its own origin, and DENY left it blank. Cross-origin framing is
+		// still refused.
+		"X-Frame-Options": "SAMEORIGIN",
+		"Referrer-Policy": "no-referrer",
 	}
 	for header, value := range want {
 		if got := recorder.Header().Get(header); got != value {
@@ -98,7 +101,7 @@ func TestSecurityHeadersArePresent(t *testing.T) {
 	}
 
 	csp := recorder.Header().Get("Content-Security-Policy")
-	for _, directive := range []string{"default-src 'none'", "script-src 'self'", "frame-ancestors 'none'"} {
+	for _, directive := range []string{"default-src 'none'", "script-src 'self'", "frame-ancestors 'self'"} {
 		if !strings.Contains(csp, directive) {
 			t.Errorf("CSP is missing %q: %s", directive, csp)
 		}

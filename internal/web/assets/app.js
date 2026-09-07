@@ -656,6 +656,7 @@ function renderStatus(data) {
         tone: monitor.archiveState && monitor.archiveState !== "ok" ? "error" : "ok",
       },
       { key: "monitor.archiveError", value: monitor.archiveError, tone: "error" },
+      { key: "monitor.networkConflict", value: monitor.networkConflict, tone: "error" },
       { key: "monitor.archiveMaxAge", value: monitor.archiveMaxAge },
       {
         key: "monitor.frameFrozen",
