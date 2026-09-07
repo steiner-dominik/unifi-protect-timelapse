@@ -3,65 +3,82 @@
 All notable changes to this project are documented here.
 
 Versions are `YY.MM.NN`: the year, the month, and a sequence within that month.
-The Home Assistant add-on pins the exact version, so every release here must
-have a matching add-on bump in
-[home-assistant-apps](https://github.com/steiner-dominik/home-assistant-apps).
-
-## 26.09.02
-
-### Added
-
-- **Camera fallback.** `CAMERA_FALLBACK_SOURCE` names a second source to try
-  when the primary fails, so the Protect API can be preferred with the camera's
-  anonymous snapshot endpoint behind it. The primary is retried on every
-  capture, so recovery needs no intervention. The status page and
-  `timelapse_camera_fallback_active` show which source is actually in use.
-- **Watchdog mode.** `MONITOR_ENABLED` probes the camera and checks how fresh
-  the archive is without writing anything. It defaults on wherever capturing is
-  off, which is what makes a non-capturing deployment useful as a health check.
-- **Frozen-camera detection.** A camera can answer with byte-identical frames
-  forever while looking healthy by every other measure.
-  `FROZEN_FRAME_THRESHOLD` consecutive identical frames now mark the service
-  unhealthy and fire a notification.
-- **Gap detection.** Each day reports where images are missing, derived from the
-  spacing of the frames that are there rather than from today's schedule, so
-  historical days are judged fairly.
-- **Timelapse video rendering.** A day can be rendered to MP4 on demand, with a
-  selectable frame rate.
-- **ZIP download.** A day can be downloaded as a ZIP of the original JPEGs.
-- **Home Assistant entities.** Running as an add-on, the service writes
-  `binary_sensor.timelapse_camera_online`, `sensor.timelapse_archive_newest`,
-  `sensor.timelapse_spool_files` and others straight to the Core API using the
-  Supervisor token. No broker and no template sensors.
-- **Home Assistant ingress.** The frontend now works behind a generated
-  sub-path, and `WEB_AUTH_MODE=ingress` defers authentication to Home Assistant.
-- **Periodic sync.** `SYNC_INTERVAL` sweeps the buffer on a fixed cadence, for
-  the split deployment where capture happens in a different container.
-- **Archive delegation.** `ARCHIVE_PROXY_URL` points an instance without an
-  archive mount at one that has it, for both browsing and status.
-
-### Changed
-
-- **Two containers by default.** The capturing container no longer mounts the
-  archive at all, so it always starts and keeps capturing while the NAS is
-  unreachable. A second container holds the NFS mount, which Docker now performs
-  itself: nothing needs to be in the host's fstab.
-- The default published port is 8099 rather than 8080.
-- The runtime image is Alpine rather than distroless, because video rendering
-  needs ffmpeg.
-- `WEB_AUTH_MODE` replaces the implicit "a token means auth is on" behaviour,
-  which remains the default when the mode is unset.
+The Home Assistant add-on pins the exact version, so every release here needs a
+matching add-on bump in
+[home-assistant-apps](https://github.com/steiner-dominik/home-assistant-apps) —
+publish the release here first.
 
 ## 26.09.01
 
-### Added
+First release. Replaces a Raspberry Pi that captured a frame every five minutes
+with two cron jobs and a pair of shell scripts.
 
-- First release. Captures stills from a UniFi Protect camera on a schedule,
-  buffers them locally, and moves them to an archive when it is reachable.
-  Replaces a Raspberry Pi running two cron jobs.
-- Anonymous snapshot and UniFi Protect integration API sources.
-- Fixed-hours or sunrise/sunset capture windows.
-- Sentinel-file guard so an unmounted share is never written into.
-- Web interface with live view, archive browser, status page, English and
-  German, light and dark, installable as a PWA.
-- Health check, Prometheus metrics and a failure webhook.
+### Capture and archive
+
+- Captures stills from a UniFi Protect camera on a schedule and buffers them on
+  local disk, moving them to an archive when it is reachable. If the archive is
+  unavailable the images accumulate locally and transfer once it returns.
+- Two snapshot sources: the camera's anonymous endpoint, and the UniFi Protect
+  integration API with an API key. `CAMERA_FALLBACK_SOURCE` names a second
+  source to try whenever the primary fails; the primary is retried on every
+  capture, so recovery needs no intervention.
+- Keeps the `YYYY/YYYY-MM/YYYY-MM-DD/<prefix>...jpg` layout of the setup it
+  replaces, so an existing archive stays uniform.
+- A sentinel file must be present in the archive before anything is moved. An
+  unmounted NFS share is otherwise indistinguishable from an empty local
+  directory, and the sync would fill the local filesystem while deleting the
+  originals.
+- Images are written to a temporary name and renamed, so a sync can never pick
+  up a half-written frame.
+- Capture windows are either fixed hours or derived from sunrise and sunset,
+  computed with the standard library.
+
+### Catching silent failures
+
+The setup this replaces stopped capturing for weeks after the camera's IP
+address changed, and nothing reported it. Five checks now cover that class of
+problem, each feeding the health check, the metrics and the UI:
+
+- Snapshots are validated by status, content type, size and JPEG magic bytes, so
+  an HTTP error page is never archived as an image.
+- Capture freshness: captures have stopped inside the active window.
+- A camera probe: the camera does not answer at all.
+- Frozen-frame detection: the camera answers with byte-identical frames forever,
+  which looks healthy by every other measure.
+- Archive freshness and gap detection: images are captured but not landing, or a
+  past day has missing stretches.
+
+### Deployment
+
+- Two containers. The capturing one has no archive mount, so Docker can never
+  fail to start it; the other holds the NFS volume, which Docker mounts itself,
+  so nothing needs to be in the host's fstab.
+- `ARCHIVE_PROXY_URL` lets the container without the mount serve archive
+  browsing and status from the one that has it, keeping a single dashboard.
+- Runs as a non-root user with all capabilities dropped and no elevated
+  privileges in either container.
+- Published for `linux/amd64`, `linux/arm64` and `linux/arm/v7` with build
+  provenance.
+
+### Web interface
+
+- Live view, archive browser with playback and gap reporting, and a status page
+  built from an explicitly redacted projection of the configuration.
+- A day can be rendered to MP4 or downloaded as a ZIP of the original JPEGs.
+- Light and dark themes, English and German, installable as a PWA. No framework,
+  no bundler, no npm.
+- Optional token authentication, off by default.
+
+### Home Assistant
+
+- The same image runs as an add-on with capturing and syncing switched off,
+  acting as a watchdog: it probes the camera and watches the archive without
+  writing anything.
+- The frontend works behind an ingress sub-path, and `WEB_AUTH_MODE=ingress`
+  defers authentication to Home Assistant.
+- Entities are written straight to the Core API using the Supervisor token — no
+  broker and no template sensors.
+
+### Monitoring
+
+- Docker health check, Prometheus metrics, and a generic failure webhook.
