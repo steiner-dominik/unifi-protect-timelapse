@@ -140,3 +140,27 @@ func TestFramePathResolvesAndReportsMissing(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+// A watchdog deployment has sync switched off and exists precisely to look at
+// the archive, so browsing must not depend on this instance doing the syncing.
+func TestBrowsingWorksWithSyncDisabled(t *testing.T) {
+	b, cfg := newTestBrowser(t)
+	cfg.Sync.Mode = config.SyncOff
+	writeFrame(t, cfg.Sync.ArchiveDir, "2026-09-07", "snapshot_2026-09-07-05-00-00.jpg")
+
+	if years := b.Years(); len(years) != 1 || years[0] != "2026" {
+		t.Fatalf("Years() = %v, want the archive to be searched with sync off", years)
+	}
+
+	frames, err := b.Frames("2026-09-07")
+	if err != nil {
+		t.Fatalf("Frames: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("expected the archived frame to be listed, got %d", len(frames))
+	}
+
+	if _, err := b.FramePath("2026-09-07", "snapshot_2026-09-07-05-00-00.jpg"); err != nil {
+		t.Errorf("FramePath should resolve with sync off: %v", err)
+	}
+}

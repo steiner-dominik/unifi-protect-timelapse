@@ -45,12 +45,18 @@ func New(cfg *config.Config) *Browser { return &Browser{cfg: cfg} }
 
 // roots returns the directories to search, archive first so that synced frames
 // take precedence over any spool leftovers.
+//
+// The archive counts whenever it is configured, not only when this instance
+// syncs to it. A watchdog deployment has sync switched off and still needs to
+// browse the archive it is watching, which is its whole purpose.
 func (b *Browser) roots() []string {
 	var roots []string
-	if b.cfg.SyncEnabled() && b.cfg.Sync.ArchiveDir != "" {
+	if b.cfg.Sync.ArchiveDir != "" {
 		roots = append(roots, b.cfg.Sync.ArchiveDir)
 	}
-	roots = append(roots, b.cfg.Capture.SpoolDir)
+	if b.cfg.Capture.SpoolDir != "" {
+		roots = append(roots, b.cfg.Capture.SpoolDir)
+	}
 	return roots
 }
 

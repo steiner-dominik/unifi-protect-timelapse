@@ -8,6 +8,36 @@ matching add-on bump in
 [home-assistant-apps](https://github.com/steiner-dominik/home-assistant-apps) —
 publish the release here first.
 
+## 26.09.02
+
+Fixes found while packaging the Home Assistant add-on. All three shared a root
+cause: code that assumed an instance which does not capture also has nothing to
+say about the archive.
+
+### Fixed
+
+- The image set `SPOOL_DIR`, `ARCHIVE_DIR` and `STATE_DIR` as Docker `ENV`
+  defaults, which are indistinguishable from values an operator set and so
+  silently overrode the add-on's own options. The add-on ignored its configured
+  archive path entirely, and its state did not survive a restart. The binary
+  already defaults to the same values, so the `ENV` block was removed.
+- The archive browser only searched the archive when this instance was syncing
+  to it, so a watchdog deployment could not browse the archive it exists to
+  watch.
+- The status page derived its own health verdict from capture state, reporting
+  a perfectly healthy watchdog as needing attention. The server's verdict is now
+  published in `/api/status` and used directly, so the UI, the container health
+  check and the Home Assistant watchdog cannot disagree.
+
+### Changed
+
+- The status page hides capture-specific rows on an instance that does not
+  capture, and names its role instead.
+- The live view captions the newest archived image when there is no capture of
+  its own to describe.
+- CI runs the tests in a shuffled order, and smoke-tests the add-on options
+  path against the built image.
+
 ## 26.09.01
 
 First release. Replaces a Raspberry Pi that captured a frame every five minutes

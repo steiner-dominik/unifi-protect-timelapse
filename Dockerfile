@@ -48,11 +48,10 @@ RUN apk add --no-cache ca-certificates ffmpeg tzdata \
 
 COPY --from=build /out/timelapse /usr/local/bin/timelapse
 
-# Defaults for the in-container paths; override with volumes in compose.
-ENV SPOOL_DIR=/spool \
-    ARCHIVE_DIR=/archive \
-    STATE_DIR=/state \
-    WEB_ADDR=:8080
+# No ENV defaults for the paths or the listen address on purpose. The binary
+# already defaults to exactly these values, and a variable set here would be
+# indistinguishable from one the operator set — which would silently override
+# the Home Assistant add-on's own options.
 
 EXPOSE 8080
 

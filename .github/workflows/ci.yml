@@ -95,3 +95,33 @@ jobs:
           fi
           cat /tmp/out
           grep -q "CAMERA_SNAPSHOT_URL" /tmp/out
+
+      - name: Smoke test the Home Assistant add-on options path
+        run: |
+          set -eu
+          # The Supervisor configures an add-on through this file, not the
+          # environment. An ENV default baked into the image would silently win
+          # over it, which is exactly the regression this guards.
+          mkdir -p /tmp/addon/data
+          cat > /tmp/addon/data/options.json <<'JSON'
+          {
+            "archive_path": "/media/timelapse",
+            "camera_source": "snapshot",
+            "camera_snapshot_url": "http://camera.invalid/snap.jpeg",
+            "capture_enabled": false,
+            "sync_mode": "off",
+            "auth_mode": "ingress",
+            "log_level": "debug"
+          }
+          JSON
+
+          docker run --rm -v /tmp/addon/data:/data \
+            unifi-protect-timelapse:ci serve >/tmp/addon-out 2>&1 &
+          pid=$!
+          sleep 5
+          kill "$pid" 2>/dev/null || true
+          cat /tmp/addon-out
+
+          grep -q 'archive=/media/timelapse' /tmp/addon-out
+          grep -q 'spool=/data/spool' /tmp/addon-out
+          grep -q 'monitor=true' /tmp/addon-out

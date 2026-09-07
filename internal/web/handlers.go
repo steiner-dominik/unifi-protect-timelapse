@@ -25,10 +25,19 @@ type StatusResponse struct {
 	Now       time.Time     `json:"now"`
 	Uptime    string        `json:"uptime"`
 	Config    config.Public `json:"config"`
+	Health    Health        `json:"health"`
 	Capture   CaptureStatus `json:"capture"`
 	Sync      SyncStatus    `json:"sync"`
 	Monitor   MonitorStatus `json:"monitor"`
 	Languages []string      `json:"languages"`
+}
+
+// Health is the service's own verdict, so the UI, the container health check
+// and the Home Assistant watchdog all agree rather than each deriving their own
+// answer from the raw fields.
+type Health struct {
+	Healthy bool   `json:"healthy"`
+	Reason  string `json:"reason"`
 }
 
 // MonitorStatus describes the watchdog: whether the camera answers and how
@@ -97,8 +106,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	window := s.scheduler.WindowFor(now)
 	spool := s.syncer.Spool()
 
+	healthy, reason := s.Healthy()
+
 	resp := StatusResponse{
 		Version:   s.version,
+		Health:    Health{Healthy: healthy, Reason: reason},
 		Now:       now,
 		Uptime:    time.Since(startedAt).Truncate(time.Second).String(),
 		Config:    s.cfg.Public(),

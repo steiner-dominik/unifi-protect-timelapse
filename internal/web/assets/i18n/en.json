@@ -73,7 +73,11 @@
     "syncError": "Last sync error",
     "spool": "Buffered locally",
     "spoolOldest": "Oldest buffered image",
-    "uptime": "Uptime"
+    "uptime": "Uptime",
+    "health": "Verdict",
+    "role": "Role",
+    "roleWatchdog": "watchdog (not capturing)",
+    "archiveService": "Archive service reachable"
   },
   "config": {
     "cameraSource": "Camera source",

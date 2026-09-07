@@ -13,6 +13,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/state"
 )
 
 // Every language must define exactly the same keys, or switching language would
@@ -256,5 +259,50 @@ func writeTestFrames(t *testing.T, root, day string, names ...string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte{0xFF, 0xD8, 0xFF, 0x00}, 0o600); err != nil {
 			t.Fatalf("write: %v", err)
 		}
+	}
+}
+
+// The UI must not re-derive health: a watchdog deployment never has a capture
+// success, and deriving from that would report a healthy service as broken.
+func TestStatusCarriesTheServerHealthVerdict(t *testing.T) {
+	server, cfg := newTestServer(t, "")
+	cfg.Capture.Enabled = false
+	cfg.Monitor.Enabled = true
+	cfg.Monitor.Interval = time.Millisecond
+	cfg.Monitor.ArchiveMaxAge = time.Hour
+
+	server.store.Update(func(d *state.Data) {
+		d.LastProbeAt = time.Now()
+		d.CameraOnline = true
+		d.ArchiveNewestAt = time.Now()
+	})
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+
+	var payload struct {
+		Health struct {
+			Healthy bool   `json:"healthy"`
+			Reason  string `json:"reason"`
+		} `json:"health"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decoding status: %v", err)
+	}
+	if !payload.Health.Healthy {
+		t.Errorf("a watchdog with a reachable camera and fresh archive should be healthy: %q",
+			payload.Health.Reason)
+	}
+
+	// And the verdict must follow the actual condition.
+	server.store.Update(func(d *state.Data) { d.CameraOnline = false })
+
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decoding status: %v", err)
+	}
+	if payload.Health.Healthy {
+		t.Error("an unreachable camera should make the watchdog unhealthy")
 	}
 }

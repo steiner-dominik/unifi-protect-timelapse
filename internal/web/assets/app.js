@@ -200,7 +200,9 @@ function reloadLatest() {
   const image = $("live-image");
   image.src = url(`/api/latest.jpg?t=${Date.now()}`);
   setLiveBadge("live.badgeArchived", "ok");
-  renderLiveCaption(status?.capture?.latestCapturedAt, status?.capture?.latestFilename);
+  const captured = status?.capture?.latestCapturedAt ?? status?.monitor?.archiveNewestAt;
+  const filename = status?.capture?.latestFilename || status?.monitor?.archiveNewest;
+  renderLiveCaption(captured, filename);
 }
 
 async function loadPreview() {
@@ -465,29 +467,50 @@ function renderStatus(data) {
   const sync = data.sync;
   const config = data.config;
 
-  const healthy = capture.consecutiveFailures === 0 && Boolean(capture.lastSuccess);
+  const healthy = data.health.healthy;
   const badge = $("status-badge");
   badge.textContent = healthy ? t("status.ok", "Healthy") : t("status.problem", "Attention");
   badge.dataset.tone = healthy ? "ok" : "error";
+  badge.title = data.health.reason ?? "";
+
+  // A deployment that does not capture has no capture facts worth showing;
+  // listing them all as dashes would only bury the ones that matter.
+  const capturing = config.captureEnabled;
+  const captureFacts = capturing
+    ? [
+        { key: "status.captureActive", value: yesNo(capture.active), tone: capture.active ? "ok" : null },
+        { key: "status.window", value: `${capture.windowStart} – ${capture.windowEnd}` },
+        { key: "status.nextCapture", value: formatDateTime(capture.nextCapture) },
+        { key: "status.lastSuccess", value: `${formatDateTime(capture.lastSuccess)} (${formatAge(capture.lastSuccess)})` },
+        { key: "status.lastFile", value: capture.latestFilename },
+        { key: "status.lastSize", value: capture.latestBytes ? formatBytes(capture.latestBytes) : null },
+        {
+          key: "status.failures",
+          value: capture.consecutiveFailures,
+          tone: capture.consecutiveFailures > 0 ? "error" : null,
+        },
+        { key: "status.lastError", value: capture.lastError, tone: "error" },
+        { key: "status.totals", value: `${capture.totalOk} / ${capture.totalFailed}` },
+      ]
+    : [
+        { key: "status.role", value: t("status.roleWatchdog", "watchdog (not capturing)") },
+        { key: "status.window", value: `${capture.windowStart} – ${capture.windowEnd}` },
+      ];
 
   renderFacts($("status-facts"), [
-    { key: "status.captureActive", value: yesNo(capture.active), tone: capture.active ? "ok" : null },
-    { key: "status.window", value: `${capture.windowStart} – ${capture.windowEnd}` },
-    { key: "status.nextCapture", value: formatDateTime(capture.nextCapture) },
-    { key: "status.lastSuccess", value: `${formatDateTime(capture.lastSuccess)} (${formatAge(capture.lastSuccess)})` },
-    { key: "status.lastFile", value: capture.latestFilename },
-    { key: "status.lastSize", value: capture.latestBytes ? formatBytes(capture.latestBytes) : null },
-    {
-      key: "status.failures",
-      value: capture.consecutiveFailures,
-      tone: capture.consecutiveFailures > 0 ? "error" : null,
-    },
-    { key: "status.lastError", value: capture.lastError, tone: "error" },
-    { key: "status.totals", value: `${capture.totalOk} / ${capture.totalFailed}` },
+    ...captureFacts,
+    { key: "status.health", value: data.health.reason, tone: healthy ? null : "error" },
     {
       key: "status.archiveAvailable",
-      value: sync.enabled ? yesNo(sync.archiveAvailable) : t("status.syncDisabled", "sync disabled"),
-      tone: !sync.enabled ? null : sync.archiveAvailable ? "ok" : "error",
+      value: sync.enabled || sync.delegated
+        ? yesNo(sync.archiveAvailable)
+        : t("status.syncDisabled", "sync disabled"),
+      tone: !(sync.enabled || sync.delegated) ? null : sync.archiveAvailable ? "ok" : "error",
+    },
+    {
+      key: "status.archiveService",
+      value: sync.delegated ? yesNo(sync.serviceReachable) : null,
+      tone: sync.delegated && !sync.serviceReachable ? "error" : null,
     },
     { key: "status.nextSync", value: formatDateTime(sync.nextSync) },
     { key: "status.lastSync", value: `${formatDateTime(sync.lastSuccess)} (${formatAge(sync.lastSuccess)})` },

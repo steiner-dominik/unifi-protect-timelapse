@@ -73,7 +73,11 @@
     "syncError": "Letzter Übertragungsfehler",
     "spool": "Lokal zwischengespeichert",
     "spoolOldest": "Ältestes zwischengespeichertes Bild",
-    "uptime": "Laufzeit"
+    "uptime": "Laufzeit",
+    "health": "Bewertung",
+    "role": "Rolle",
+    "roleWatchdog": "Überwachung (nimmt nicht auf)",
+    "archiveService": "Archivdienst erreichbar"
   },
   "config": {
     "cameraSource": "Bildquelle",

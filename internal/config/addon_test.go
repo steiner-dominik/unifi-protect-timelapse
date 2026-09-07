@@ -190,3 +190,44 @@ func TestAddonOptionsProduceAWorkingWatchdogConfig(t *testing.T) {
 		t.Errorf("ArchiveDir = %q", cfg.Sync.ArchiveDir)
 	}
 }
+
+// Only /data survives an add-on restart or backup, so state and spool must
+// default there rather than into the container's ephemeral filesystem.
+func TestAddonDefaultsPersistentPaths(t *testing.T) {
+	isolateEnv(t)
+	path := writeOptions(t, `{"capture_enabled": false}`)
+
+	if err := LoadAddonOptions(path); err != nil {
+		t.Fatalf("LoadAddonOptions: %v", err)
+	}
+	if got := os.Getenv("STATE_DIR"); got != "/data/state" {
+		t.Errorf("STATE_DIR = %q, want /data/state", got)
+	}
+	if got := os.Getenv("SPOOL_DIR"); got != "/data/spool" {
+		t.Errorf("SPOOL_DIR = %q, want /data/spool", got)
+	}
+}
+
+func TestAddonPersistentPathsRespectTheEnvironment(t *testing.T) {
+	isolateEnv(t)
+	path := writeOptions(t, `{"capture_enabled": false}`)
+	t.Setenv("STATE_DIR", "/custom/state")
+
+	if err := LoadAddonOptions(path); err != nil {
+		t.Fatalf("LoadAddonOptions: %v", err)
+	}
+	if got := os.Getenv("STATE_DIR"); got != "/custom/state" {
+		t.Errorf("STATE_DIR = %q, want the environment's value", got)
+	}
+}
+
+// A plain container must not suddenly start using /data.
+func TestPersistentPathDefaultsOnlyApplyToAddons(t *testing.T) {
+	isolateEnv(t)
+	if err := LoadAddonOptions(filepath.Join(t.TempDir(), "absent.json")); err != nil {
+		t.Fatalf("LoadAddonOptions: %v", err)
+	}
+	if _, set := os.LookupEnv("STATE_DIR"); set {
+		t.Error("STATE_DIR should be untouched outside an add-on")
+	}
+}

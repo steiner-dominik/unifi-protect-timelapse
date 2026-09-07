@@ -47,6 +47,21 @@ func LoadAddonOptions(path string) error {
 		return fmt.Errorf("parsing %s: %w", path, err)
 	}
 
+	// The Supervisor persists /data across restarts and backups, and nothing
+	// else in an add-on's filesystem survives. Anything the service must not
+	// lose belongs there, so these become the defaults once an options file
+	// proves this is an add-on.
+	for name, value := range map[string]string{
+		"STATE_DIR": "/data/state",
+		"SPOOL_DIR": "/data/spool",
+	} {
+		if _, alreadySet := os.LookupEnv(name); !alreadySet {
+			if err := os.Setenv(name, value); err != nil {
+				return fmt.Errorf("applying add-on default %s: %w", name, err)
+			}
+		}
+	}
+
 	for key, value := range options {
 		name := envNameFor(key)
 		if name == "" {
