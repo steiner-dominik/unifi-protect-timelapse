@@ -83,8 +83,13 @@ jobs:
           # The binary must start, print its version, and reject an empty
           # configuration with a useful message rather than a panic.
           docker run --rm unifi-protect-timelapse:ci version
-          if docker run --rm unifi-protect-timelapse:ci serve 2>&1 | tee /tmp/out; then
-            echo "expected an empty configuration to be rejected"
+
+          # Redirect rather than pipe: the exit status of a pipeline is the
+          # status of its last command, which would always be tee's.
+          if docker run --rm unifi-protect-timelapse:ci serve >/tmp/out 2>&1; then
+            echo "expected an empty configuration to be rejected, but it started"
+            cat /tmp/out
             exit 1
           fi
+          cat /tmp/out
           grep -q "CAMERA_SNAPSHOT_URL" /tmp/out
