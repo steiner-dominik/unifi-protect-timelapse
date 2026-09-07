@@ -1,0 +1,101 @@
+{
+  "app": {
+    "title": "Zeitraffer",
+    "subtitle": "Aufnahmedienst für UniFi Protect"
+  },
+  "nav": {
+    "live": "Live",
+    "archive": "Zeitraffer",
+    "status": "Status"
+  },
+  "common": {
+    "yes": "ja",
+    "no": "nein"
+  },
+  "a11y": {
+    "skipToContent": "Zum Inhalt springen",
+    "language": "Sprache",
+    "theme": "Design wechseln"
+  },
+  "live": {
+    "heading": "Letzte Aufnahme",
+    "reload": "Letzte Aufnahme neu laden",
+    "preview": "Live-Vorschau",
+    "imageAlt": "Aktuelles Kamerabild",
+    "hint": "Die Live-Vorschau wird nur angezeigt und niemals ins Archiv geschrieben. So bleibt im Zeitraffer genau ein Bild pro konfiguriertem Intervall erhalten.",
+    "notSaved": "nicht gespeichert",
+    "badgeArchived": "archiviertes Bild",
+    "badgePreview": "Live-Vorschau",
+    "badgeLoading": "wird geladen",
+    "badgeError": "Kamera nicht erreichbar"
+  },
+  "archive": {
+    "heading": "Archiv durchsuchen",
+    "year": "Jahr",
+    "month": "Monat",
+    "day": "Tag",
+    "series": "Serie",
+    "empty": "Für diese Auswahl wurden keine Bilder gefunden.",
+    "imageAlt": "Archiviertes Kamerabild",
+    "position": "Position",
+    "speed": "Geschwindigkeit",
+    "play": "Abspielen oder pausieren",
+    "first": "Erstes Bild",
+    "last": "Letztes Bild",
+    "previous": "Vorheriges Bild",
+    "next": "Nächstes Bild"
+  },
+  "status": {
+    "heading": "Status",
+    "configHeading": "Konfiguration",
+    "configHint": "Schreibgeschützte Ansicht der laufenden Konfiguration. Geheimnisse sind niemals enthalten.",
+    "ok": "In Ordnung",
+    "problem": "Achtung",
+    "captureActive": "Nimmt gerade auf",
+    "window": "Aufnahmezeitraum",
+    "nextCapture": "Nächste Aufnahme",
+    "lastSuccess": "Letzte erfolgreiche Aufnahme",
+    "lastFile": "Letzte Datei",
+    "lastSize": "Größe der letzten Datei",
+    "failures": "Fehler in Folge",
+    "lastError": "Letzter Aufnahmefehler",
+    "totals": "Aufnahmen ok / fehlgeschlagen",
+    "archiveAvailable": "Archiv eingebunden",
+    "syncDisabled": "Übertragung deaktiviert",
+    "nextSync": "Nächste Übertragung",
+    "lastSync": "Letzte erfolgreiche Übertragung",
+    "lastSyncFiles": "Zuletzt übertragen",
+    "syncError": "Letzter Übertragungsfehler",
+    "spool": "Lokal zwischengespeichert",
+    "spoolOldest": "Ältestes zwischengespeichertes Bild",
+    "uptime": "Laufzeit"
+  },
+  "config": {
+    "cameraSource": "Bildquelle",
+    "cameraTarget": "Kamera-Endpunkt",
+    "protectKey": "Protect-API-Schlüssel gesetzt",
+    "protectInsecure": "TLS-Prüfung deaktiviert",
+    "interval": "Aufnahmeintervall",
+    "scheduleMode": "Zeitplanmodus",
+    "activeWindow": "Aktiver Zeitraum",
+    "prefix": "Dateinamen-Präfix",
+    "timezone": "Zeitzone",
+    "spoolDir": "Zwischenspeicher-Verzeichnis",
+    "archiveDir": "Archivverzeichnis",
+    "sentinel": "Kontrolldatei",
+    "syncMode": "Übertragungsmodus",
+    "syncAt": "Nächtliche Übertragung um",
+    "auth": "Authentifizierung aktiv",
+    "metrics": "Metrik-Endpunkt",
+    "notify": "Fehler-Webhook",
+    "version": "Version"
+  },
+  "update": {
+    "available": "Eine neue Version ist verfügbar.",
+    "reload": "Neu laden"
+  },
+  "footer": {
+    "disclaimer": "Community-Projekt. Nicht verbunden mit, unterstützt von oder gesponsert durch Ubiquiti Inc., Raspberry Pi Ltd., Docker Inc. oder andere hier genannte Unternehmen oder Produkte. Alle Marken sind Eigentum ihrer jeweiligen Inhaber.",
+    "madeBy": "Ein Projekt von"
+  }
+}

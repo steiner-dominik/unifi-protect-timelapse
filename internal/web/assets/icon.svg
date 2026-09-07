@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Timelapse">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#162a3f"/>
+      <stop offset="1" stop-color="#2f6f4f"/>
+    </linearGradient>
+    <clipPath id="frame">
+      <rect width="512" height="512" rx="112"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#frame)">
+    <rect width="512" height="512" fill="url(#sky)"/>
+    <circle cx="358" cy="154" r="56" fill="#f2c96b"/>
+    <path d="M0 318 L154 184 L286 318 L512 318 L512 512 L0 512 Z" fill="#1b4a39"/>
+    <path d="M0 400 L118 300 L242 400 L318 344 L446 452 L512 400 L512 512 L0 512 Z" fill="#0f2c24"/>
+  </g>
+</svg>

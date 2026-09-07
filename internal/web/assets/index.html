@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en" data-theme="auto" data-version="__VERSION__">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="description" content="Timelapse capture service for UniFi Protect cameras">
+<title>Timelapse</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icon.svg?v=__VERSION__" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/icon-192.png?v=__VERSION__">
+<link rel="stylesheet" href="/static/app.css?v=__VERSION__">
+<script src="/static/theme.js?v=__VERSION__"></script>
+</head>
+<body>
+
+<a class="skip-link" href="#main" data-i18n="a11y.skipToContent">Skip to content</a>
+
+<header class="topbar">
+  <div class="brand">
+    <img class="brand-icon" src="/static/icon.svg?v=__VERSION__" alt="" width="28" height="28">
+    <div>
+      <h1 class="brand-title" data-i18n="app.title">Timelapse</h1>
+      <p class="brand-subtitle" id="brand-subtitle" data-i18n="app.subtitle">UniFi Protect capture service</p>
+    </div>
+  </div>
+
+  <div class="topbar-actions">
+    <label class="visually-hidden" for="lang-select" data-i18n="a11y.language">Language</label>
+    <select id="lang-select" class="control"></select>
+
+    <button id="theme-toggle" class="control icon-button" type="button"
+            aria-label="Theme" data-i18n-aria="a11y.theme">
+      <span id="theme-icon" aria-hidden="true">◐</span>
+    </button>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Sections">
+  <button class="tab" type="button" role="tab" data-view="live" aria-selected="true"
+          data-i18n="nav.live">Live</button>
+  <button class="tab" type="button" role="tab" data-view="archive" aria-selected="false"
+          data-i18n="nav.archive">Timelapse</button>
+  <button class="tab" type="button" role="tab" data-view="status" aria-selected="false"
+          data-i18n="nav.status">Status</button>
+</nav>
+
+<main id="main">
+
+  <section class="view" id="view-live" role="tabpanel" aria-labelledby="tab-live">
+    <div class="card">
+      <div class="card-head">
+        <h2 data-i18n="live.heading">Latest capture</h2>
+        <span class="badge" id="live-badge" hidden></span>
+      </div>
+
+      <figure class="viewer">
+        <img id="live-image" alt="" data-i18n-alt="live.imageAlt" decoding="async">
+        <figcaption id="live-caption" class="viewer-caption"></figcaption>
+      </figure>
+
+      <div class="button-row">
+        <button id="btn-reload" class="button" type="button" data-i18n="live.reload">
+          Reload last capture
+        </button>
+        <button id="btn-preview" class="button button-secondary" type="button"
+                data-i18n="live.preview">Live preview</button>
+      </div>
+      <p class="hint" data-i18n="live.hint">
+        The live preview is shown only; it is never written to the archive, so the
+        timelapse keeps one image per configured interval.
+      </p>
+    </div>
+  </section>
+
+  <section class="view" id="view-archive" role="tabpanel" hidden>
+    <div class="card">
+      <div class="card-head">
+        <h2 data-i18n="archive.heading">Browse the archive</h2>
+      </div>
+
+      <div class="selector-row">
+        <div class="field">
+          <label for="sel-year" data-i18n="archive.year">Year</label>
+          <select id="sel-year" class="control"></select>
+        </div>
+        <div class="field">
+          <label for="sel-month" data-i18n="archive.month">Month</label>
+          <select id="sel-month" class="control"></select>
+        </div>
+        <div class="field">
+          <label for="sel-day" data-i18n="archive.day">Day</label>
+          <select id="sel-day" class="control"></select>
+        </div>
+        <div class="field" id="group-field" hidden>
+          <label for="sel-group" data-i18n="archive.series">Series</label>
+          <select id="sel-group" class="control"></select>
+        </div>
+      </div>
+
+      <p class="empty" id="archive-empty" data-i18n="archive.empty">
+        No images found for this selection.
+      </p>
+
+      <figure class="viewer" id="archive-viewer" hidden>
+        <img id="archive-image" alt="" data-i18n-alt="archive.imageAlt" decoding="async">
+        <figcaption id="archive-caption" class="viewer-caption"></figcaption>
+      </figure>
+
+      <div class="player" id="archive-player" hidden>
+        <div class="button-row">
+          <button id="btn-first" class="button button-secondary" type="button"
+                  aria-label="First" data-i18n-aria="archive.first">⏮</button>
+          <button id="btn-prev" class="button button-secondary" type="button"
+                  aria-label="Previous" data-i18n-aria="archive.previous">◀</button>
+          <button id="btn-play" class="button" type="button"
+                  aria-label="Play" data-i18n-aria="archive.play">▶</button>
+          <button id="btn-next" class="button button-secondary" type="button"
+                  aria-label="Next" data-i18n-aria="archive.next">▶</button>
+          <button id="btn-last" class="button button-secondary" type="button"
+                  aria-label="Last" data-i18n-aria="archive.last">⏭</button>
+        </div>
+
+        <label class="visually-hidden" for="scrubber" data-i18n="archive.position">Position</label>
+        <input id="scrubber" class="scrubber" type="range" min="0" max="0" value="0" step="1">
+
+        <div class="field field-inline">
+          <label for="sel-speed" data-i18n="archive.speed">Speed</label>
+          <select id="sel-speed" class="control">
+            <option value="500">2 fps</option>
+            <option value="200" selected>5 fps</option>
+            <option value="100">10 fps</option>
+            <option value="50">20 fps</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="view-status" role="tabpanel" hidden>
+    <div class="card">
+      <div class="card-head">
+        <h2 data-i18n="status.heading">Status</h2>
+        <span class="badge" id="status-badge"></span>
+      </div>
+      <dl class="facts" id="status-facts"></dl>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2 data-i18n="status.configHeading">Configuration</h2>
+      </div>
+      <p class="hint" data-i18n="status.configHint">
+        Read-only view of the running configuration. Secrets are never included.
+      </p>
+      <dl class="facts" id="config-facts"></dl>
+    </div>
+  </section>
+
+</main>
+
+<div class="toast" id="update-toast" hidden role="status">
+  <span data-i18n="update.available">A new version is available.</span>
+  <button id="btn-update" class="button button-small" type="button" data-i18n="update.reload">
+    Reload
+  </button>
+</div>
+
+<footer class="footer">
+  <p class="disclaimer" data-i18n="footer.disclaimer">
+    Community project. Not affiliated with, endorsed by or sponsored by Ubiquiti Inc.,
+    Raspberry Pi Ltd., Docker Inc. or any other company or product referenced here.
+    All trademarks are the property of their respective owners.
+  </p>
+  <p class="colophon">
+    <span data-i18n="footer.madeBy">A project by</span>
+    <a href="https://dominik.st/einer" rel="noopener noreferrer external" target="_blank">dominik.st/einer</a>
+    <span class="dot">·</span>
+    <span class="version" id="footer-version"></span>
+  </p>
+</footer>
+
+<script src="/static/app.js?v=__VERSION__" type="module"></script>
+</body>
+</html>

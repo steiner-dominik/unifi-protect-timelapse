@@ -1,0 +1,101 @@
+{
+  "app": {
+    "title": "Timelapse",
+    "subtitle": "UniFi Protect capture service"
+  },
+  "nav": {
+    "live": "Live",
+    "archive": "Timelapse",
+    "status": "Status"
+  },
+  "common": {
+    "yes": "yes",
+    "no": "no"
+  },
+  "a11y": {
+    "skipToContent": "Skip to content",
+    "language": "Language",
+    "theme": "Switch theme"
+  },
+  "live": {
+    "heading": "Latest capture",
+    "reload": "Reload last capture",
+    "preview": "Live preview",
+    "imageAlt": "Most recent camera image",
+    "hint": "The live preview is shown only; it is never written to the archive, so the timelapse keeps exactly one image per configured interval.",
+    "notSaved": "not saved",
+    "badgeArchived": "archived frame",
+    "badgePreview": "live preview",
+    "badgeLoading": "loading",
+    "badgeError": "camera unreachable"
+  },
+  "archive": {
+    "heading": "Browse the archive",
+    "year": "Year",
+    "month": "Month",
+    "day": "Day",
+    "series": "Series",
+    "empty": "No images found for this selection.",
+    "imageAlt": "Archived camera image",
+    "position": "Position",
+    "speed": "Speed",
+    "play": "Play or pause",
+    "first": "First image",
+    "last": "Last image",
+    "previous": "Previous image",
+    "next": "Next image"
+  },
+  "status": {
+    "heading": "Status",
+    "configHeading": "Configuration",
+    "configHint": "Read-only view of the running configuration. Secrets are never included.",
+    "ok": "Healthy",
+    "problem": "Attention",
+    "captureActive": "Capturing now",
+    "window": "Capture window",
+    "nextCapture": "Next capture",
+    "lastSuccess": "Last successful capture",
+    "lastFile": "Last file",
+    "lastSize": "Last file size",
+    "failures": "Consecutive failures",
+    "lastError": "Last capture error",
+    "totals": "Captures ok / failed",
+    "archiveAvailable": "Archive mounted",
+    "syncDisabled": "sync disabled",
+    "nextSync": "Next sync",
+    "lastSync": "Last successful sync",
+    "lastSyncFiles": "Last sync moved",
+    "syncError": "Last sync error",
+    "spool": "Buffered locally",
+    "spoolOldest": "Oldest buffered image",
+    "uptime": "Uptime"
+  },
+  "config": {
+    "cameraSource": "Camera source",
+    "cameraTarget": "Camera endpoint",
+    "protectKey": "Protect API key set",
+    "protectInsecure": "TLS verification disabled",
+    "interval": "Capture interval",
+    "scheduleMode": "Schedule mode",
+    "activeWindow": "Active window",
+    "prefix": "Filename prefix",
+    "timezone": "Timezone",
+    "spoolDir": "Spool directory",
+    "archiveDir": "Archive directory",
+    "sentinel": "Sentinel file",
+    "syncMode": "Sync mode",
+    "syncAt": "Nightly sync at",
+    "auth": "Authentication enabled",
+    "metrics": "Metrics endpoint",
+    "notify": "Failure webhook",
+    "version": "Version"
+  },
+  "update": {
+    "available": "A new version is available.",
+    "reload": "Reload"
+  },
+  "footer": {
+    "disclaimer": "Community project. Not affiliated with, endorsed by or sponsored by Ubiquiti Inc., Raspberry Pi Ltd., Docker Inc. or any other company or product referenced here. All trademarks are the property of their respective owners.",
+    "madeBy": "A project by"
+  }
+}

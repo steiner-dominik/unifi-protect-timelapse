@@ -1,0 +1,18 @@
+# Local environment; never commit real credentials.
+.env
+.env.local
+
+# Build output
+/timelapse
+/dist/
+/out/
+
+# Local test data
+/spool/
+/archive/
+/state/
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/

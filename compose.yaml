@@ -1,0 +1,57 @@
+# Deployment for unifi-protect-timelapse.
+#
+# Copy .env.example to .env and edit it. Nothing is configured in this file
+# directly, so it can be committed and shared as it is.
+
+services:
+  timelapse:
+    image: ghcr.io/steiner-dominik/unifi-protect-timelapse:latest
+    container_name: timelapse
+    restart: unless-stopped
+    env_file: .env
+
+    # NFS is mounted on the host (see README). A bind mount is used rather than
+    # a Docker-managed NFS volume so that the directory always exists: if the
+    # NAS is down the container still starts, the sentinel check fails, and
+    # images buffer locally exactly as intended.
+    volumes:
+      - ${SPOOL_PATH:-./data/spool}:/spool
+      - ${STATE_PATH:-./data/state}:/state
+      - ${ARCHIVE_PATH:?set ARCHIVE_PATH in .env}:/archive
+
+    # NFS maps permissions by numeric id, so this has to match the owner of the
+    # files on the share. Check with: stat -c '%u:%g' <archive path on host>
+    user: "${PUID:-1000}:${PGID:-1000}"
+
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+
+    # The service needs no elevated privileges at all.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# --- Alternative: let Docker mount the NFS share ------------------------------
+#
+# Instead of a host mount, Docker can mount the share itself. The tradeoff: if
+# the NAS is unreachable when the container starts, the mount fails and the
+# container will not start at all, so capturing stops too. The host mount above
+# does not have that failure mode.
+#
+# Replace the archive line in `volumes:` with `- archive:/archive` and add:
+#
+# volumes:
+#   archive:
+#     driver: local
+#     driver_opts:
+#       type: nfs
+#       o: "addr=nas.example.lan,nfsvers=4,soft,timeo=100,retrans=2,rw"
+#       device: ":/path/to/timelapse"

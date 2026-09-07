@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+
+      - name: Verify formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Confirm the icons match their generator
+        run: |
+          go run ./tools/genicons
+          git diff --exit-code -- internal/web/assets
+
+  image:
+    name: Build image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only; publishing happens in release.yml.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: unifi-protect-timelapse:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+            REVISION=${{ github.sha }}
+
+      - name: Smoke test the image
+        run: |
+          # The binary must start, print its version, and reject an empty
+          # configuration with a useful message rather than a panic.
+          docker run --rm unifi-protect-timelapse:ci version
+          if docker run --rm unifi-protect-timelapse:ci serve 2>&1 | tee /tmp/out; then
+            echo "expected an empty configuration to be rejected"
+            exit 1
+          fi
+          grep -q "CAMERA_SNAPSHOT_URL" /tmp/out
