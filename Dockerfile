@@ -62,6 +62,12 @@ EXPOSE 8080
 HEALTHCHECK --interval=2m --timeout=15s --start-period=1m --retries=2 \
     CMD ["/usr/local/bin/timelapse", "healthcheck"]
 
-USER timelapse:timelapse
+# No USER on purpose. The Home Assistant Supervisor writes an add-on's
+# configuration to /data as root and does not change the container's user, so an
+# image that drops privileges here cannot read its own configuration. Add-ons
+# are expected to run as root.
+#
+# The standalone deployment does not: compose.yaml pins user 1000:1000 for both
+# services, which is also what NFS needs to map ownership correctly.
 ENTRYPOINT ["/usr/local/bin/timelapse"]
 CMD ["serve"]

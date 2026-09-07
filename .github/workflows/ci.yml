@@ -100,10 +100,16 @@ jobs:
         run: |
           set -eu
           # The Supervisor configures an add-on through this file, not the
-          # environment. An ENV default baked into the image would silently win
-          # over it, which is exactly the regression this guards.
-          mkdir -p /tmp/addon/data
-          cat > /tmp/addon/data/options.json <<'JSON'
+          # environment, and writes it as root with mode 0600 without changing
+          # the container's user. Two regressions are guarded here: an ENV
+          # default baked into the image silently winning over the options, and
+          # the image dropping privileges so it cannot read them at all.
+          #
+          # A named volume is required: a bind mount would not preserve the
+          # ownership that makes this a real test.
+          docker volume create addon-data
+          docker run --rm -v addon-data:/data alpine:3.22 sh -c '
+            cat > /data/options.json <<JSON
           {
             "archive_path": "/media/timelapse",
             "camera_source": "snapshot",
@@ -114,14 +120,36 @@ jobs:
             "log_level": "debug"
           }
           JSON
+            chown 0:0 /data/options.json && chmod 600 /data/options.json'
 
-          docker run --rm -v /tmp/addon/data:/data \
+          docker run --rm -v addon-data:/data \
             unifi-protect-timelapse:ci serve >/tmp/addon-out 2>&1 &
           pid=$!
           sleep 5
           kill "$pid" 2>/dev/null || true
           cat /tmp/addon-out
 
+          if grep -q 'permission denied' /tmp/addon-out; then
+            echo "::error::The image cannot read its own add-on configuration. \
+          Home Assistant add-ons run as root; do not set USER in the Dockerfile."
+            exit 1
+          fi
           grep -q 'archive=/media/timelapse' /tmp/addon-out
           grep -q 'spool=/data/spool' /tmp/addon-out
           grep -q 'monitor=true' /tmp/addon-out
+
+      - name: Smoke test the standalone deployment as a non-root user
+        run: |
+          set -eu
+          # Outside Home Assistant there is no options file, and compose pins a
+          # normal user. That combination must keep working.
+          docker run --rm --user 1000:1000 \
+            -e CAMERA_SNAPSHOT_URL=http://camera.invalid/snap.jpeg \
+            -e SPOOL_DIR=/tmp/spool -e STATE_DIR=/tmp/state -e SYNC_MODE=off \
+            unifi-protect-timelapse:ci serve >/tmp/nonroot-out 2>&1 &
+          pid=$!
+          sleep 5
+          kill "$pid" 2>/dev/null || true
+          cat /tmp/nonroot-out
+
+          grep -q 'web interface listening' /tmp/nonroot-out

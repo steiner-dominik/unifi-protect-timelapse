@@ -449,9 +449,12 @@ JavaScript take effect on reload.
 
 ## Security notes
 
-- Runs as a non-root user with all capabilities dropped and
-  `no-new-privileges`. Neither container needs any elevated privilege, and
-  neither mounts anything on the host.
+- `compose.yaml` runs both services as user `1000:1000` with all capabilities
+  dropped and `no-new-privileges`. Neither container needs any elevated
+  privilege, and neither mounts anything on the host. The image itself does not
+  pin a user, because a Home Assistant add-on has to run as root to read the
+  configuration the Supervisor writes for it — so pass `--user` if you run it
+  with `docker run` rather than compose.
 - Nothing is hard-coded: all configuration comes from the environment.
 - The debug view is built from an explicitly redacted projection of the
   configuration. The API key is reduced to a boolean and URLs are stripped of

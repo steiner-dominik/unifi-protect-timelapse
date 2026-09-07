@@ -38,6 +38,14 @@ func LoadAddonOptions(path string) error {
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
+	if errors.Is(err, fs.ErrPermission) {
+		// The Supervisor writes this file as root and does not change the
+		// container's user, so this almost always means the image dropped
+		// privileges it should not have.
+		return fmt.Errorf("cannot read %s: %w\n"+
+			"The Home Assistant Supervisor writes this file as root. "+
+			"Run the container as root, or unset the user override.", path, err)
+	}
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", path, err)
 	}

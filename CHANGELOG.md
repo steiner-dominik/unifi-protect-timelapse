@@ -8,6 +8,31 @@ matching add-on bump in
 [home-assistant-apps](https://github.com/steiner-dominik/home-assistant-apps) —
 publish the release here first.
 
+## 26.09.03
+
+### Fixed
+
+- The Home Assistant add-on failed to start with
+  `reading /data/options.json: permission denied`. The image declared
+  `USER timelapse`, but the Supervisor writes an add-on's configuration as root
+  with mode 0600 and does not change the container's user, so the service could
+  not read its own configuration. Add-ons are expected to run as root, so the
+  image no longer drops privileges.
+
+  The standalone deployment is unaffected: `compose.yaml` now pins user
+  `1000:1000` for both services, which is also what NFS needs to map ownership.
+  Anyone running `docker run` by hand should pass `--user` to match.
+
+- The error message for an unreadable options file now says what to do about it.
+
+### Changed
+
+- CI runs the add-on smoke test against a named volume with root-owned,
+  mode 0600 options, which is what the Supervisor actually produces. The
+  previous bind-mount version could not reproduce the failure, because Docker
+  Desktop's file sharing ignores ownership.
+- CI additionally smoke-tests the standalone deployment as a non-root user.
+
 ## 26.09.02
 
 Fixes found while packaging the Home Assistant add-on. All three shared a root

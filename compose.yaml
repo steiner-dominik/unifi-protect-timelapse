@@ -37,6 +37,10 @@ services:
     ports:
       - "${WEB_PORT:-8099}:8080"
 
+    # The image itself runs as root, because a Home Assistant add-on has to.
+    # Outside Home Assistant there is no reason to, so pin a normal user here.
+    user: "${PUID:-1000}:${PGID:-1000}"
+
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -72,8 +76,9 @@ services:
       - archive:/archive
       - archive-state:/state
 
-    # NFS maps permissions by numeric id, so this has to match the owner of the
-    # files on the share. Check with: stat -c '%u:%g' on a file in the share.
+    # As above, plus NFS maps permissions by numeric id, so this has to match
+    # the owner of the files on the share.
+    # Check with: stat -c '%u:%g' on a file in the share.
     user: "${PUID:-1000}:${PGID:-1000}"
 
     security_opt:
