@@ -43,7 +43,12 @@
     "first": "Erstes Bild",
     "last": "Letztes Bild",
     "previous": "Vorheriges Bild",
-    "next": "Nächstes Bild"
+    "next": "Nächstes Bild",
+    "frames": "Bilder",
+    "gaps": "Lücken",
+    "missing": "fehlende Bilder",
+    "video": "Video herunterladen",
+    "zip": "Bilder herunterladen"
   },
   "status": {
     "heading": "Status",
@@ -85,10 +90,15 @@
     "sentinel": "Kontrolldatei",
     "syncMode": "Übertragungsmodus",
     "syncAt": "Nächtliche Übertragung um",
-    "auth": "Authentifizierung aktiv",
     "metrics": "Metrik-Endpunkt",
     "notify": "Fehler-Webhook",
-    "version": "Version"
+    "version": "Version",
+    "cameraFallback": "Ausweichquelle",
+    "noFallback": "keine",
+    "authMode": "Authentifizierungsmodus",
+    "monitor": "Überwachung aktiv",
+    "video": "Video-Erstellung",
+    "haPublish": "Home-Assistant-Entitäten"
   },
   "update": {
     "available": "Eine neue Version ist verfügbar.",
@@ -97,5 +107,20 @@
   "footer": {
     "disclaimer": "Community-Projekt. Nicht verbunden mit, unterstützt von oder gesponsert durch Ubiquiti Inc., Raspberry Pi Ltd., Docker Inc. oder andere hier genannte Unternehmen oder Produkte. Alle Marken sind Eigentum ihrer jeweiligen Inhaber.",
     "madeBy": "Ein Projekt von"
+  },
+  "monitor": {
+    "heading": "Kamera und Archiv",
+    "cameraOnline": "Kamera erreichbar",
+    "lastProbe": "Letzte Prüfung",
+    "probeError": "Fehler bei letzter Prüfung",
+    "sourceInUse": "Verwendete Quelle",
+    "source_primary": "primär",
+    "source_fallback": "Ausweichquelle",
+    "source_none": "keine",
+    "archiveNewest": "Neuestes archiviertes Bild",
+    "archiveNewestFile": "Neueste Datei",
+    "archiveMaxAge": "Grenzwert für Veralterung",
+    "frameFrozen": "Kamera eingefroren",
+    "identicalFrames": "Identische Bilder in Folge"
   }
 }

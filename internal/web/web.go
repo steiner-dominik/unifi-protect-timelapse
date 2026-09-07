@@ -25,6 +25,7 @@ import (
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/schedule"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/state"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/syncer"
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/video"
 )
 
 //go:embed assets
@@ -42,8 +43,17 @@ type Server struct {
 	syncer    *syncer.Syncer
 	browser   *archive.Browser
 	scheduler *schedule.Scheduler
+	video     *video.Renderer
 	log       *slog.Logger
 	version   string
+
+	// proxy forwards archive requests to another instance when this one has no
+	// archive mount of its own.
+	proxy *http.Client
+
+	// newestFrame locates the most recent archived image. It is injected so the
+	// web package does not depend on the monitor package.
+	newestFrame func() (string, time.Time, error)
 
 	static  fs.FS
 	i18n    fs.FS
@@ -67,8 +77,12 @@ type Options struct {
 	Capturer  *capture.Capturer
 	Syncer    *syncer.Syncer
 	Scheduler *schedule.Scheduler
+	Video     *video.Renderer
 	Log       *slog.Logger
 	Version   string
+	// NewestFrame locates the most recent archived image, used as the live
+	// view's source when capture is disabled.
+	NewestFrame func() (string, time.Time, error)
 }
 
 // New builds the server and prepares the embedded assets.
@@ -79,15 +93,18 @@ func New(opts Options) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:       opts.Config,
-		store:     opts.State,
-		capturer:  opts.Capturer,
-		syncer:    opts.Syncer,
-		browser:   archive.New(opts.Config),
-		scheduler: opts.Scheduler,
-		log:       opts.Log,
-		version:   opts.Version,
-		static:    static,
+		cfg:         opts.Config,
+		store:       opts.State,
+		capturer:    opts.Capturer,
+		syncer:      opts.Syncer,
+		browser:     archive.New(opts.Config),
+		scheduler:   opts.Scheduler,
+		video:       opts.Video,
+		log:         opts.Log,
+		version:     opts.Version,
+		static:      static,
+		proxy:       &http.Client{Timeout: 60 * time.Second},
+		newestFrame: opts.NewestFrame,
 	}
 
 	// Translations may be overridden from disk so a new language can be added
@@ -149,6 +166,13 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /api/archive/months/{month}/days", s.handleDays)
 		mux.HandleFunc("GET /api/archive/days/{day}/frames", s.handleFrames)
 		mux.HandleFunc("GET /api/archive/days/{day}/frames/{name}", s.handleFrame)
+		mux.HandleFunc("GET /api/archive/days/{day}/report", s.handleReport)
+		if s.cfg.Web.ZipEnabled {
+			mux.HandleFunc("GET /api/archive/days/{day}/download.zip", s.handleZip)
+		}
+		if s.video != nil && s.video.Available() {
+			mux.HandleFunc("GET /api/archive/days/{day}/video.mp4", s.handleVideo)
+		}
 	}
 
 	return s.securityHeaders(s.authenticate(mux))
@@ -225,8 +249,15 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 // ?token= query parameter that exchanges itself for the cookie so the URL can
 // be bookmarked once and forgotten.
 func (s *Server) authenticate(next http.Handler) http.Handler {
+	// Under Home Assistant ingress the Supervisor has already authenticated the
+	// user before the request reaches this process, and the port is not
+	// published, so a second credential would only be friction.
+	if s.cfg.Web.AuthMode == config.AuthIngress {
+		return next
+	}
+
 	token := s.cfg.Web.AuthToken
-	if token == "" {
+	if s.cfg.Web.AuthMode == config.AuthNone || token == "" {
 		return next
 	}
 

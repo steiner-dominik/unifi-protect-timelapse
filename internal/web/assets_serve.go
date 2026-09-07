@@ -37,17 +37,27 @@ func renderAsset(fsys fs.FS, name, version string) ([]byte, error) {
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// The shell must always be revalidated, otherwise a stale index would keep
-	// pointing at the previous version's assets.
+	// pointing at the previous version's assets. It also varies by the ingress
+	// prefix, which is another reason it can never be cached hard.
 	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, "index.html", buildTime, bytes.NewReader(s.index))
+	w.Header().Set("Vary", ingressHeader)
+	_, _ = w.Write(withBase(s.index, basePath(r)))
 }
 
 func (s *Server) serveTemplated(body []byte, contentType string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Cache-Control", "no-cache")
-		http.ServeContent(w, r, "", buildTime, bytes.NewReader(body))
+		w.Header().Set("Vary", ingressHeader)
+		_, _ = w.Write(withBase(body, basePath(r)))
 	}
+}
+
+// withBase fills in the path prefix the app is served under. It is applied per
+// request rather than at startup because the same binary answers both directly
+// and through Home Assistant ingress, whose prefix is generated per session.
+func withBase(body []byte, base string) []byte {
+	return bytes.ReplaceAll(body, []byte("__BASE__"), []byte(base))
 }
 
 // staticTypes maps the extensions the frontend actually uses. Serving from an

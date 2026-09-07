@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="auto" data-version="__VERSION__">
+<html lang="en" data-theme="auto" data-version="__VERSION__" data-base="__BASE__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -8,11 +8,11 @@
 <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
 <meta name="description" content="Timelapse capture service for UniFi Protect cameras">
 <title>Timelapse</title>
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" href="/static/icon.svg?v=__VERSION__" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/static/icon-192.png?v=__VERSION__">
-<link rel="stylesheet" href="/static/app.css?v=__VERSION__">
-<script src="/static/theme.js?v=__VERSION__"></script>
+<link rel="manifest" href="__BASE__/manifest.webmanifest">
+<link rel="icon" href="__BASE__/static/icon.svg?v=__VERSION__" type="image/svg+xml">
+<link rel="apple-touch-icon" href="__BASE__/static/icon-192.png?v=__VERSION__">
+<link rel="stylesheet" href="__BASE__/static/app.css?v=__VERSION__">
+<script src="__BASE__/static/theme.js?v=__VERSION__"></script>
 </head>
 <body>
 
@@ -20,7 +20,7 @@
 
 <header class="topbar">
   <div class="brand">
-    <img class="brand-icon" src="/static/icon.svg?v=__VERSION__" alt="" width="28" height="28">
+    <img class="brand-icon" src="__BASE__/static/icon.svg?v=__VERSION__" alt="" width="28" height="28">
     <div>
       <h1 class="brand-title" data-i18n="app.title">Timelapse</h1>
       <p class="brand-subtitle" id="brand-subtitle" data-i18n="app.subtitle">UniFi Protect capture service</p>
@@ -109,6 +109,8 @@
         <figcaption id="archive-caption" class="viewer-caption"></figcaption>
       </figure>
 
+      <p class="report" id="archive-report" hidden></p>
+
       <div class="player" id="archive-player" hidden>
         <div class="button-row">
           <button id="btn-first" class="button button-secondary" type="button"
@@ -126,14 +128,23 @@
         <label class="visually-hidden" for="scrubber" data-i18n="archive.position">Position</label>
         <input id="scrubber" class="scrubber" type="range" min="0" max="0" value="0" step="1">
 
-        <div class="field field-inline">
-          <label for="sel-speed" data-i18n="archive.speed">Speed</label>
-          <select id="sel-speed" class="control">
-            <option value="500">2 fps</option>
-            <option value="200" selected>5 fps</option>
-            <option value="100">10 fps</option>
-            <option value="50">20 fps</option>
-          </select>
+        <div class="export-row">
+          <div class="field field-inline">
+            <label for="sel-speed" data-i18n="archive.speed">Speed</label>
+            <select id="sel-speed" class="control">
+              <option value="500">2 fps</option>
+              <option value="200" selected>5 fps</option>
+              <option value="100">10 fps</option>
+              <option value="50">20 fps</option>
+            </select>
+          </div>
+
+          <div class="button-row export-actions">
+            <a id="btn-video" class="button" hidden data-i18n="archive.video"
+               download>Download video</a>
+            <a id="btn-zip" class="button button-secondary" hidden data-i18n="archive.zip"
+               download>Download images</a>
+          </div>
         </div>
       </div>
     </div>
@@ -146,6 +157,14 @@
         <span class="badge" id="status-badge"></span>
       </div>
       <dl class="facts" id="status-facts"></dl>
+    </div>
+
+    <div class="card" id="monitor-card" hidden>
+      <div class="card-head">
+        <h2 data-i18n="monitor.heading">Camera and archive</h2>
+        <span class="badge" id="monitor-badge"></span>
+      </div>
+      <dl class="facts" id="monitor-facts"></dl>
     </div>
 
     <div class="card">
@@ -182,6 +201,6 @@
   </p>
 </footer>
 
-<script src="/static/app.js?v=__VERSION__" type="module"></script>
+<script src="__BASE__/static/app.js?v=__VERSION__" type="module"></script>
 </body>
 </html>

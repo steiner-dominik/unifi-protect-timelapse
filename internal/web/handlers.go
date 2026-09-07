@@ -16,6 +16,7 @@ import (
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/archive"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/config"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/metrics"
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/state"
 )
 
 // StatusResponse is the payload the debug view renders.
@@ -26,7 +27,27 @@ type StatusResponse struct {
 	Config    config.Public `json:"config"`
 	Capture   CaptureStatus `json:"capture"`
 	Sync      SyncStatus    `json:"sync"`
+	Monitor   MonitorStatus `json:"monitor"`
 	Languages []string      `json:"languages"`
+}
+
+// MonitorStatus describes the watchdog: whether the camera answers and how
+// fresh the archive is. It is populated whether or not this instance captures,
+// so one status page serves both deployments.
+type MonitorStatus struct {
+	Enabled         bool       `json:"enabled"`
+	CameraOnline    bool       `json:"cameraOnline"`
+	LastProbe       *time.Time `json:"lastProbe"`
+	LastProbeOK     *time.Time `json:"lastProbeOk"`
+	LastProbeError  string     `json:"lastProbeError"`
+	SourceInUse     string     `json:"sourceInUse"`
+	ArchiveNewest   string     `json:"archiveNewest"`
+	ArchiveNewestAt *time.Time `json:"archiveNewestAt"`
+	ArchiveStale    bool       `json:"archiveStale"`
+	ArchiveMaxAge   string     `json:"archiveMaxAge"`
+	FrameFrozen     bool       `json:"frameFrozen"`
+	IdenticalFrames int        `json:"identicalFrames"`
+	VideoAvailable  bool       `json:"videoAvailable"`
 }
 
 // CaptureStatus describes the capture side of the service.
@@ -48,7 +69,12 @@ type CaptureStatus struct {
 
 // SyncStatus describes the archive side of the service.
 type SyncStatus struct {
-	Enabled          bool       `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Delegated is true when this instance has no archive of its own and asks
+	// another one, which is how the split deployment keeps capture independent
+	// of the NAS being reachable.
+	Delegated        bool       `json:"delegated"`
+	ServiceReachable bool       `json:"serviceReachable"`
 	ArchiveAvailable bool       `json:"archiveAvailable"`
 	NextSync         *time.Time `json:"nextSync"`
 	LastAttempt      *time.Time `json:"lastAttempt"`
@@ -126,9 +152,44 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		next := s.scheduler.NextDailyAt(now, hour, minute)
 		resp.Sync.NextSync = &next
 	}
+	resp.Monitor = MonitorStatus{
+		Enabled:         s.cfg.Monitor.Enabled,
+		CameraOnline:    data.CameraOnline,
+		LastProbe:       optionalTime(data.LastProbeAt),
+		LastProbeOK:     optionalTime(data.LastProbeOK),
+		LastProbeError:  data.LastProbeError,
+		SourceInUse:     data.CameraLastUsed,
+		ArchiveNewest:   data.ArchiveNewest,
+		ArchiveNewestAt: optionalTime(data.ArchiveNewestAt),
+		ArchiveStale:    s.archiveStale(data),
+		ArchiveMaxAge:   s.cfg.Monitor.ArchiveMaxAge.String(),
+		FrameFrozen:     data.FrameFrozen,
+		IdenticalFrames: data.IdenticalCount,
+		VideoAvailable:  s.video != nil && s.video.Available(),
+	}
+
 	if spool.Oldest > 0 {
 		oldest := time.Unix(spool.Oldest, 0).In(s.cfg.Location)
 		resp.Sync.SpoolOldest = &oldest
+	}
+
+	// When the archive lives in another container, ask it rather than reporting
+	// "sync disabled", which would be technically true and completely unhelpful.
+	if s.cfg.Web.ArchiveProxyURL != "" {
+		resp.Sync.Delegated = true
+		if upstream, ok := s.upstreamSync(r.Context()); ok {
+			resp.Sync.ServiceReachable = true
+			resp.Sync.ArchiveAvailable = upstream.ArchiveAvailable
+			resp.Sync.LastSuccess = upstream.LastSuccess
+			resp.Sync.LastAttempt = upstream.LastAttempt
+			resp.Sync.LastError = upstream.LastError
+			resp.Sync.LastFiles = upstream.LastFiles
+			resp.Sync.LastBytes = upstream.LastBytes
+			resp.Sync.TotalOK = upstream.TotalOK
+			resp.Sync.TotalFailed = upstream.TotalFailed
+			resp.Sync.NextSync = upstream.NextSync
+			resp.Sync.Enabled = upstream.Enabled
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -166,6 +227,12 @@ func (s *Server) handleLatest(w http.ResponseWriter, r *http.Request) {
 	path := s.store.LatestImagePath()
 	file, err := os.Open(path)
 	if err != nil {
+		// A deployment that does not capture has no mirror of its own, so the
+		// newest image in the archive stands in for it. This is what makes the
+		// live view useful in a watchdog deployment.
+		if s.latestFromArchive(w, r) {
+			return
+		}
 		http.Error(w, "no image captured yet", http.StatusNotFound)
 		return
 	}
@@ -219,10 +286,18 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleYears(w http.ResponseWriter, r *http.Request) {
+	if s.proxyArchive(w, r) {
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"years": orEmpty(s.browser.Years())})
 }
 
 func (s *Server) handleMonths(w http.ResponseWriter, r *http.Request) {
+	if s.proxyArchive(w, r) {
+		return
+	}
+
 	months, err := s.browser.Months(r.PathValue("year"))
 	if err != nil {
 		writeArchiveError(w, err)
@@ -232,6 +307,10 @@ func (s *Server) handleMonths(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDays(w http.ResponseWriter, r *http.Request) {
+	if s.proxyArchive(w, r) {
+		return
+	}
+
 	days, err := s.browser.Days(r.PathValue("month"))
 	if err != nil {
 		writeArchiveError(w, err)
@@ -241,6 +320,10 @@ func (s *Server) handleDays(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleFrames(w http.ResponseWriter, r *http.Request) {
+	if s.proxyArchive(w, r) {
+		return
+	}
+
 	frames, err := s.browser.Frames(r.PathValue("day"))
 	if err != nil {
 		writeArchiveError(w, err)
@@ -253,6 +336,10 @@ func (s *Server) handleFrames(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleFrame(w http.ResponseWriter, r *http.Request) {
+	if s.proxyArchive(w, r) {
+		return
+	}
+
 	filePath, err := s.browser.FramePath(r.PathValue("day"), r.PathValue("name"))
 	if err != nil {
 		writeArchiveError(w, err)
@@ -317,32 +404,86 @@ func (s *Server) defaultLanguage() string {
 	return "en"
 }
 
-// Healthy reports whether captures are happening as configured. This is the
-// signal the Docker health check uses, and it exists because the original
-// setup failed silently for weeks when the camera's IP address changed.
-func (s *Server) Healthy() (bool, string) {
-	if !s.cfg.Capture.Enabled {
-		return true, "capture disabled"
+// archiveStale reports whether the newest archived image has aged past the
+// configured limit. It only means anything inside the capture window: outside
+// it, nothing new is expected.
+func (s *Server) archiveStale(data state.Data) bool {
+	if data.ArchiveNewestAt.IsZero() {
+		return false
 	}
+	if !s.scheduler.Active(time.Now().In(s.cfg.Location)) {
+		return false
+	}
+	return time.Since(data.ArchiveNewestAt) > s.cfg.Monitor.ArchiveMaxAge
+}
 
+// Healthy reports whether the service is doing its job, which depends on what
+// it was asked to do.
+//
+// A capturing deployment is healthy while frames keep being written. A watchdog
+// deployment captures nothing, so it is healthy while the camera answers and
+// images keep appearing in the archive. This is the signal the Docker health
+// check and the Home Assistant watchdog both use, and it exists because the
+// setup this replaces failed silently for weeks when the camera's IP changed.
+func (s *Server) Healthy() (bool, string) {
 	now := time.Now().In(s.cfg.Location)
+	data := s.store.Get()
+
 	if !s.scheduler.Active(now) {
 		return true, "outside the capture window"
 	}
-
-	data := s.store.Get()
-	if data.LastCaptureSuccess.IsZero() {
-		// Allow one grace interval after start before reporting unhealthy.
-		if time.Since(startedAt) < 2*s.cfg.Capture.Interval {
-			return true, "starting up"
-		}
-		return false, "no successful capture since start"
+	// Give the service one grace period after start before judging it.
+	if time.Since(startedAt) < s.startupGrace() {
+		return true, "starting up"
 	}
 
-	if age := time.Since(data.LastCaptureSuccess); age > 2*s.cfg.Capture.Interval {
-		return false, fmt.Sprintf("last successful capture was %s ago", age.Truncate(time.Second))
+	if s.cfg.Capture.Enabled {
+		switch {
+		case data.LastCaptureSuccess.IsZero():
+			return false, "no successful capture since start"
+		case time.Since(data.LastCaptureSuccess) > 2*s.cfg.Capture.Interval:
+			return false, fmt.Sprintf("last successful capture was %s ago",
+				time.Since(data.LastCaptureSuccess).Truncate(time.Second))
+		case data.FrameFrozen:
+			return false, fmt.Sprintf("the camera has returned %d identical frames in a row",
+				data.IdenticalCount)
+		}
+	}
+
+	if s.cfg.Monitor.Enabled {
+		if !data.LastProbeAt.IsZero() && !data.CameraOnline {
+			return false, "the camera is not reachable"
+		}
+		if s.archiveStale(data) {
+			return false, fmt.Sprintf("no new image in the archive for %s",
+				time.Since(data.ArchiveNewestAt).Truncate(time.Second))
+		}
+	}
+
+	if !s.cfg.Capture.Enabled && !s.cfg.Monitor.Enabled {
+		return true, "neither capture nor monitoring is enabled"
 	}
 	return true, "ok"
+}
+
+// startupGrace is how long after start the service is given before it can
+// report unhealthy, sized to whichever loop is slowest.
+//
+// Only the loops that actually run count: a watchdog deployment has no capture
+// interval to wait for, and taking one into account would leave it reporting
+// "starting up" long after it had a real answer.
+func (s *Server) startupGrace() time.Duration {
+	var grace time.Duration
+	if s.cfg.Capture.Enabled {
+		grace = 2 * s.cfg.Capture.Interval
+	}
+	if s.cfg.Monitor.Enabled {
+		grace = max(grace, 2*s.cfg.Monitor.Interval)
+	}
+	if grace <= 0 {
+		grace = time.Minute
+	}
+	return grace
 }
 
 func writeArchiveError(w http.ResponseWriter, err error) {

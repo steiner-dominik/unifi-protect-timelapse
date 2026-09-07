@@ -47,6 +47,19 @@ const (
 	SyncOff SyncMode = "off"
 )
 
+// AuthMode selects how the web interface authenticates callers.
+type AuthMode string
+
+const (
+	// AuthNone leaves the interface open, appropriate on a trusted LAN.
+	AuthNone AuthMode = "none"
+	// AuthLocal requires the shared token configured in WEB_AUTH_TOKEN.
+	AuthLocal AuthMode = "local"
+	// AuthIngress trusts Home Assistant, which authenticates every request
+	// before it reaches the ingress path.
+	AuthIngress AuthMode = "ingress"
+)
+
 // Config is the fully resolved runtime configuration.
 type Config struct {
 	Location *time.Location
@@ -59,6 +72,9 @@ type Config struct {
 	Sync     Sync
 	Web      Web
 	Notify   Notify
+	Monitor  Monitor
+	Video    Video
+	HA       HomeAssistant
 
 	StateDir       string
 	MetricsEnabled bool
@@ -67,6 +83,11 @@ type Config struct {
 // Camera describes where snapshots come from.
 type Camera struct {
 	Kind SourceKind
+	// Fallback is tried when the primary source fails. Empty means there is
+	// no fallback. Both sources are configured independently, so the same
+	// camera can be reached through the Protect API and, if that is
+	// unavailable, through its own anonymous snapshot endpoint.
+	Fallback SourceKind
 
 	// Anonymous snapshot mode.
 	SnapshotURL string
@@ -106,11 +127,53 @@ type Schedule struct {
 
 // Sync describes how images are moved from the spool to the archive.
 type Sync struct {
-	Mode           SyncMode
-	ArchiveDir     string
-	Sentinel       string
-	At             string // "HH:MM" in the configured timezone.
+	Mode       SyncMode
+	ArchiveDir string
+	Sentinel   string
+	At         string // "HH:MM" in the configured timezone.
+	// Interval runs an additional sweep on a fixed cadence. It exists for the
+	// split deployment, where capture happens in a different container and so
+	// cannot trigger the opportunistic sync directly. Zero disables it.
+	Interval       time.Duration
 	PruneEmptyDirs bool
+}
+
+// Monitor describes the watchdog loop. It runs without capturing anything and
+// exists for deployments that only observe: the Home Assistant add-on checks
+// that the camera answers and that images keep landing in the archive, without
+// writing a single file itself.
+type Monitor struct {
+	Enabled  bool
+	Interval time.Duration
+	// ArchiveMaxAge is how stale the newest archived image may become before
+	// the service reports unhealthy. Zero means derive it from the capture
+	// interval.
+	ArchiveMaxAge time.Duration
+	// FrozenThreshold is how many byte-identical frames in a row mean the
+	// camera has stopped producing new images while still answering. Zero
+	// disables the check.
+	FrozenThreshold int
+}
+
+// Video describes on-demand timelapse rendering.
+type Video struct {
+	Enabled   bool
+	FPS       int
+	CRF       int
+	MaxFrames int
+	Timeout   time.Duration
+	FFmpeg    string
+}
+
+// HomeAssistant describes pushing state into Home Assistant. When the service
+// runs as an add-on the Supervisor injects a token, and entities can be written
+// straight to the Core REST API without a broker or any client library.
+type HomeAssistant struct {
+	PublishEnabled bool
+	BaseURL        string
+	Token          string
+	EntityPrefix   string
+	Interval       time.Duration
 }
 
 // Web describes the HTTP frontend.
@@ -124,6 +187,15 @@ type Web struct {
 	ArchiveEnabled  bool
 	LivePreview     bool
 	LiveMinInterval time.Duration
+	AuthMode        AuthMode
+	ZipEnabled      bool
+	// ArchiveProxyURL points at another instance that has the archive mounted.
+	// It exists so the capturing container never needs the archive mount and
+	// therefore always starts, even while the NAS is unreachable.
+	ArchiveProxyURL string
+	// ArchiveProxyToken authenticates against that instance when it runs with
+	// WEB_AUTH_MODE=local.
+	ArchiveProxyToken string
 }
 
 // Notify describes outbound failure notifications.
@@ -158,6 +230,7 @@ func Load() (*Config, error) {
 
 	cfg.Camera = Camera{
 		Kind:               SourceKind(strings.ToLower(envStr("CAMERA_SOURCE", string(SourceSnapshot)))),
+		Fallback:           SourceKind(strings.ToLower(envStr("CAMERA_FALLBACK_SOURCE", ""))),
 		SnapshotURL:        envStr("CAMERA_SNAPSHOT_URL", ""),
 		ProtectHost:        strings.TrimSuffix(envStr("PROTECT_HOST", ""), "/"),
 		ProtectAPIKey:      envStr("PROTECT_API_KEY", ""),
@@ -194,19 +267,65 @@ func Load() (*Config, error) {
 		ArchiveDir:     envStr("ARCHIVE_DIR", "/archive"),
 		Sentinel:       envStr("ARCHIVE_SENTINEL", ".nas"),
 		At:             envStr("SYNC_AT", "23:00"),
+		Interval:       envDur("SYNC_INTERVAL", 0, fail),
 		PruneEmptyDirs: envBool("SYNC_PRUNE_EMPTY_DIRS", true, fail),
 	}
 
 	cfg.Web = Web{
-		Enabled:         envBool("WEB_ENABLED", true, fail),
-		Addr:            envStr("WEB_ADDR", ":8080"),
-		AuthToken:       envStr("WEB_AUTH_TOKEN", ""),
-		DefaultLanguage: strings.ToLower(envStr("WEB_DEFAULT_LANGUAGE", "en")),
-		I18nDir:         envStr("WEB_I18N_DIR", ""),
-		SiteName:        envStr("WEB_SITE_NAME", ""),
-		ArchiveEnabled:  envBool("WEB_ARCHIVE_ENABLED", true, fail),
-		LivePreview:     envBool("WEB_LIVE_PREVIEW", true, fail),
-		LiveMinInterval: envDur("WEB_LIVE_MIN_INTERVAL", 2*time.Second, fail),
+		Enabled:           envBool("WEB_ENABLED", true, fail),
+		Addr:              envStr("WEB_ADDR", ":8080"),
+		AuthToken:         envStr("WEB_AUTH_TOKEN", ""),
+		DefaultLanguage:   strings.ToLower(envStr("WEB_DEFAULT_LANGUAGE", "en")),
+		I18nDir:           envStr("WEB_I18N_DIR", ""),
+		SiteName:          envStr("WEB_SITE_NAME", ""),
+		ArchiveEnabled:    envBool("WEB_ARCHIVE_ENABLED", true, fail),
+		LivePreview:       envBool("WEB_LIVE_PREVIEW", true, fail),
+		LiveMinInterval:   envDur("WEB_LIVE_MIN_INTERVAL", 2*time.Second, fail),
+		AuthMode:          AuthMode(strings.ToLower(envStr("WEB_AUTH_MODE", ""))),
+		ZipEnabled:        envBool("WEB_ZIP_ENABLED", true, fail),
+		ArchiveProxyURL:   strings.TrimSuffix(envStr("ARCHIVE_PROXY_URL", ""), "/"),
+		ArchiveProxyToken: envStr("ARCHIVE_PROXY_TOKEN", ""),
+	}
+	if cfg.Web.AuthMode == "" {
+		// Without an explicit mode, a configured token means local auth and
+		// no token means an open interface.
+		cfg.Web.AuthMode = AuthNone
+		if cfg.Web.AuthToken != "" {
+			cfg.Web.AuthMode = AuthLocal
+		}
+	}
+
+	cfg.Monitor = Monitor{
+		// A deployment that does not capture is by definition only watching,
+		// so the watchdog defaults on exactly there.
+		Enabled:         envBool("MONITOR_ENABLED", !cfg.Capture.Enabled, fail),
+		Interval:        envDur("MONITOR_INTERVAL", 5*time.Minute, fail),
+		ArchiveMaxAge:   envDur("ARCHIVE_MAX_AGE", 0, fail),
+		FrozenThreshold: envInt("FROZEN_FRAME_THRESHOLD", 3, fail),
+	}
+	if cfg.Monitor.ArchiveMaxAge <= 0 {
+		// Three intervals tolerates a single missed capture and its retries
+		// without flapping.
+		cfg.Monitor.ArchiveMaxAge = 3 * cfg.Capture.Interval
+	}
+
+	cfg.Video = Video{
+		Enabled:   envBool("VIDEO_ENABLED", true, fail),
+		FPS:       envInt("VIDEO_FPS", 12, fail),
+		CRF:       envInt("VIDEO_CRF", 23, fail),
+		MaxFrames: envInt("VIDEO_MAX_FRAMES", 5000, fail),
+		Timeout:   envDur("VIDEO_TIMEOUT", 10*time.Minute, fail),
+		FFmpeg:    envStr("FFMPEG_PATH", "ffmpeg"),
+	}
+
+	cfg.HA = HomeAssistant{
+		// SUPERVISOR_TOKEN is injected by the Home Assistant Supervisor, so its
+		// presence is a reliable signal that publishing entities is possible.
+		PublishEnabled: envBool("HA_PUBLISH_ENABLED", os.Getenv("SUPERVISOR_TOKEN") != "", fail),
+		BaseURL:        strings.TrimSuffix(envStr("HA_BASE_URL", "http://supervisor/core"), "/"),
+		Token:          envStr("SUPERVISOR_TOKEN", envStr("HA_TOKEN", "")),
+		EntityPrefix:   envStr("HA_ENTITY_PREFIX", "timelapse"),
+		Interval:       envDur("HA_PUBLISH_INTERVAL", time.Minute, fail),
 	}
 
 	cfg.Notify = Notify{
@@ -226,31 +345,14 @@ func (c *Config) validate() []error {
 	var errs []error
 	fail := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 
-	switch c.Camera.Kind {
-	case SourceSnapshot:
-		if c.Camera.SnapshotURL == "" {
-			fail("CAMERA_SNAPSHOT_URL is required when CAMERA_SOURCE=snapshot")
-		} else if u, err := url.Parse(c.Camera.SnapshotURL); err != nil {
-			fail("CAMERA_SNAPSHOT_URL: %w", err)
-		} else if u.Scheme != "http" && u.Scheme != "https" {
-			fail("CAMERA_SNAPSHOT_URL: scheme must be http or https, got %q", u.Scheme)
+	errs = append(errs, c.validateSource(c.Camera.Kind, "CAMERA_SOURCE")...)
+
+	if c.Camera.Fallback != "" {
+		if c.Camera.Fallback == c.Camera.Kind {
+			fail("CAMERA_FALLBACK_SOURCE must differ from CAMERA_SOURCE")
+		} else {
+			errs = append(errs, c.validateSource(c.Camera.Fallback, "CAMERA_FALLBACK_SOURCE")...)
 		}
-	case SourceProtect:
-		if c.Camera.ProtectHost == "" {
-			fail("PROTECT_HOST is required when CAMERA_SOURCE=protect")
-		} else if u, err := url.Parse(c.Camera.ProtectHost); err != nil {
-			fail("PROTECT_HOST: %w", err)
-		} else if u.Scheme != "http" && u.Scheme != "https" {
-			fail("PROTECT_HOST: must include scheme http:// or https://")
-		}
-		if c.Camera.ProtectAPIKey == "" {
-			fail("PROTECT_API_KEY is required when CAMERA_SOURCE=protect")
-		}
-		if c.Camera.ProtectCameraID == "" {
-			fail("PROTECT_CAMERA_ID is required when CAMERA_SOURCE=protect (see README for how to list camera IDs)")
-		}
-	default:
-		fail("CAMERA_SOURCE: must be %q or %q, got %q", SourceSnapshot, SourceProtect, c.Camera.Kind)
 	}
 
 	if c.Camera.Retries < 1 {
@@ -302,6 +404,9 @@ func (c *Config) validate() []error {
 		if c.Sync.ArchiveDir == c.Capture.SpoolDir {
 			fail("ARCHIVE_DIR and SPOOL_DIR must not be the same directory")
 		}
+		if c.Sync.Interval != 0 && c.Sync.Interval < 10*time.Second {
+			fail("SYNC_INTERVAL: must be at least 10s, or 0 to disable")
+		}
 	case SyncOff:
 	default:
 		fail("SYNC_MODE: must be %q, %q or %q, got %q", SyncOpportunistic, SyncNightly, SyncOff, c.Sync.Mode)
@@ -319,6 +424,83 @@ func (c *Config) validate() []error {
 	}
 	if c.StateDir == "" {
 		fail("STATE_DIR must not be empty")
+	}
+
+	switch c.Web.AuthMode {
+	case AuthNone, AuthIngress:
+	case AuthLocal:
+		if c.Web.AuthToken == "" {
+			fail("WEB_AUTH_TOKEN is required when WEB_AUTH_MODE=%s", AuthLocal)
+		}
+	default:
+		fail("WEB_AUTH_MODE: must be %q, %q or %q, got %q",
+			AuthNone, AuthLocal, AuthIngress, c.Web.AuthMode)
+	}
+
+	if c.Web.ArchiveProxyURL != "" {
+		if u, err := url.Parse(c.Web.ArchiveProxyURL); err != nil {
+			fail("ARCHIVE_PROXY_URL: %w", err)
+		} else if u.Scheme != "http" && u.Scheme != "https" {
+			fail("ARCHIVE_PROXY_URL: scheme must be http or https")
+		}
+	}
+
+	if c.Monitor.Enabled && c.Monitor.Interval < time.Second {
+		fail("MONITOR_INTERVAL: must be at least 1s")
+	}
+	if c.Monitor.FrozenThreshold < 0 {
+		fail("FROZEN_FRAME_THRESHOLD: must not be negative")
+	}
+	if c.Video.Enabled {
+		if c.Video.FPS < 1 || c.Video.FPS > 120 {
+			fail("VIDEO_FPS: must be between 1 and 120")
+		}
+		if c.Video.CRF < 0 || c.Video.CRF > 51 {
+			fail("VIDEO_CRF: must be between 0 and 51")
+		}
+	}
+	if c.HA.PublishEnabled && c.HA.Token == "" {
+		fail("HA_PUBLISH_ENABLED is set but no SUPERVISOR_TOKEN or HA_TOKEN is available")
+	}
+
+	if !c.Capture.Enabled && !c.Monitor.Enabled && !c.SyncEnabled() && !c.Web.Enabled {
+		fail("nothing is enabled: set at least one of CAPTURE_ENABLED, MONITOR_ENABLED, SYNC_MODE or WEB_ENABLED")
+	}
+	return errs
+}
+
+// validateSource checks the settings a particular snapshot source needs. It is
+// shared by the primary and the fallback so both are held to the same standard
+// and both report against the variable the operator actually set.
+func (c *Config) validateSource(kind SourceKind, field string) []error {
+	var errs []error
+	fail := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+
+	switch kind {
+	case SourceSnapshot:
+		if c.Camera.SnapshotURL == "" {
+			fail("CAMERA_SNAPSHOT_URL is required when %s=%s", field, SourceSnapshot)
+		} else if u, err := url.Parse(c.Camera.SnapshotURL); err != nil {
+			fail("CAMERA_SNAPSHOT_URL: %w", err)
+		} else if u.Scheme != "http" && u.Scheme != "https" {
+			fail("CAMERA_SNAPSHOT_URL: scheme must be http or https, got %q", u.Scheme)
+		}
+	case SourceProtect:
+		if c.Camera.ProtectHost == "" {
+			fail("PROTECT_HOST is required when %s=%s", field, SourceProtect)
+		} else if u, err := url.Parse(c.Camera.ProtectHost); err != nil {
+			fail("PROTECT_HOST: %w", err)
+		} else if u.Scheme != "http" && u.Scheme != "https" {
+			fail("PROTECT_HOST: must include scheme http:// or https://")
+		}
+		if c.Camera.ProtectAPIKey == "" {
+			fail("PROTECT_API_KEY is required when %s=%s", field, SourceProtect)
+		}
+		if c.Camera.ProtectCameraID == "" {
+			fail("PROTECT_CAMERA_ID is required when %s=%s (run `timelapse cameras` to list them)", field, SourceProtect)
+		}
+	default:
+		fail("%s: must be %q or %q, got %q", field, SourceSnapshot, SourceProtect, kind)
 	}
 	return errs
 }

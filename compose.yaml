@@ -2,6 +2,21 @@
 #
 # Copy .env.example to .env and edit it. Nothing is configured in this file
 # directly, so it can be committed and shared as it is.
+#
+# Two services, because capturing must never depend on the NAS:
+#
+#   timelapse  captures, serves the web UI, and buffers to a local volume.
+#              It has NO archive mount, so it always starts and keeps working
+#              through a NAS outage.
+#   archive    holds the NFS mount and moves buffered images onto it. If the
+#              NAS is unreachable, Docker cannot mount the volume and this
+#              container restarts until it can — which is harmless, because
+#              the images are safe in the spool meanwhile.
+#
+# The web UI asks the archive service for anything archive related, so you still
+# get one dashboard and one timelapse viewer.
+
+name: timelapse
 
 services:
   timelapse:
@@ -10,28 +25,22 @@ services:
     restart: unless-stopped
     env_file: .env
 
-    # NFS is mounted on the host (see README). A bind mount is used rather than
-    # a Docker-managed NFS volume so that the directory always exists: if the
-    # NAS is down the container still starts, the sentinel check fails, and
-    # images buffer locally exactly as intended.
-    volumes:
-      - ${SPOOL_PATH:-./data/spool}:/spool
-      - ${STATE_PATH:-./data/state}:/state
-      - ${ARCHIVE_PATH:?set ARCHIVE_PATH in .env}:/archive
+    environment:
+      # This container never touches the archive; the archive service does.
+      SYNC_MODE: "off"
+      ARCHIVE_PROXY_URL: "http://archive:8080"
 
-    # NFS maps permissions by numeric id, so this has to match the owner of the
-    # files on the share. Check with: stat -c '%u:%g' <archive path on host>
-    user: "${PUID:-1000}:${PGID:-1000}"
+    volumes:
+      - spool:/spool
+      - state:/state
 
     ports:
-      - "${WEB_PORT:-8080}:8080"
+      - "${WEB_PORT:-8099}:8080"
 
-    # The service needs no elevated privileges at all.
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    read_only: true
 
     logging:
       driver: json-file
@@ -39,19 +48,57 @@ services:
         max-size: "10m"
         max-file: "3"
 
-# --- Alternative: let Docker mount the NFS share ------------------------------
-#
-# Instead of a host mount, Docker can mount the share itself. The tradeoff: if
-# the NAS is unreachable when the container starts, the mount fails and the
-# container will not start at all, so capturing stops too. The host mount above
-# does not have that failure mode.
-#
-# Replace the archive line in `volumes:` with `- archive:/archive` and add:
-#
-# volumes:
-#   archive:
-#     driver: local
-#     driver_opts:
-#       type: nfs
-#       o: "addr=nas.example.lan,nfsvers=4,soft,timeo=100,retrans=2,rw"
-#       device: ":/path/to/timelapse"
+  archive:
+    image: ghcr.io/steiner-dominik/unifi-protect-timelapse:latest
+    container_name: timelapse-archive
+    restart: unless-stopped
+    env_file: .env
+
+    environment:
+      # This one only moves files. Capturing and probing belong to the other
+      # container, which owns the camera.
+      CAPTURE_ENABLED: "false"
+      MONITOR_ENABLED: "false"
+      SYNC_MODE: "opportunistic"
+      # The capture trigger lives in the other container, so sweep on a timer
+      # instead. This is the window during which images exist only locally.
+      SYNC_INTERVAL: "${SYNC_INTERVAL:-60s}"
+      ARCHIVE_PROXY_URL: ""
+      # Serves the archive API that the main UI proxies to. Not published.
+      WEB_ENABLED: "true"
+
+    volumes:
+      - spool:/spool
+      - archive:/archive
+      - archive-state:/state
+
+    # NFS maps permissions by numeric id, so this has to match the owner of the
+    # files on the share. Check with: stat -c '%u:%g' on a file in the share.
+    user: "${PUID:-1000}:${PGID:-1000}"
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  # Local buffer, shared by both services: one writes, the other drains.
+  spool:
+  state:
+  archive-state:
+
+  # Docker mounts the share itself, so nothing has to be in the host's fstab.
+  # soft plus a short timeout means a dead NAS returns errors instead of
+  # hanging the sync process forever.
+  archive:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=${NFS_HOST:?set NFS_HOST in .env},nfsvers=4,soft,timeo=100,retrans=2,rw"
+      device: ":${NFS_PATH:?set NFS_PATH in .env}"

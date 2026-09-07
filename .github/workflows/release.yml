@@ -3,13 +3,16 @@ name: Release
 on:
   push:
     branches: [main]
-    tags: ["v*.*.*"]
+    # Version scheme: YY.MM.NN, e.g. v26.09.01. NN is a sequence within the
+    # month. This is deliberately not semver, so the tags below are built from
+    # an exact match rather than docker/metadata-action's semver parser, which
+    # rejects the zero-padded month and sequence.
+    tags: ["v[0-9][0-9].[0-9][0-9].[0-9][0-9]"]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
-  # Required for build provenance attestations.
   id-token: write
   attestations: write
 
@@ -27,9 +30,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Determine version and tags
+        id: version
+        run: |
+          set -eu
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            {
+              echo "value=${version}"
+              echo "release=true"
+            } >> "$GITHUB_OUTPUT"
+            {
+              echo "tags<<EOF"
+              echo "${REGISTRY}/${IMAGE_NAME}:${version}"
+              echo "${REGISTRY}/${IMAGE_NAME}:latest"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "value=edge-$(git rev-parse --short HEAD)"
+              echo "release=false"
+              echo "tags=${REGISTRY}/${IMAGE_NAME}:edge"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check the version is in the changelog
+        if: steps.version.outputs.release == 'true'
+        run: |
+          set -eu
+          version="${{ steps.version.outputs.value }}"
+          if ! grep -q "^## ${version}\b" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md has no '## ${version}' section."
+            exit 1
+          fi
 
       - uses: docker/setup-qemu-action@v3
-
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -39,44 +77,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive tags and labels
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            # Every push to main publishes :edge.
-            type=edge,branch=main
-            # A v1.2.3 tag publishes :1.2.3, :1.2 and :1.
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            # :latest only ever points at a released tag.
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-          labels: |
-            org.opencontainers.image.title=unifi-protect-timelapse
-            org.opencontainers.image.description=Timelapse capture service for UniFi Protect cameras with local buffering and archive sync
-
-      - name: Determine version
-        id: version
-        run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=edge-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build and push
         id: push
         uses: docker/build-push-action@v6
         with:
           context: .
-          # arm/v7 is included so the image also runs on older single-board
+          # armv7 is included so the image also runs on older single-board
           # hardware, not only on the x86 server.
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.version.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=unifi-protect-timelapse
+            org.opencontainers.image.version=${{ steps.version.outputs.value }}
+            org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max
@@ -92,13 +106,64 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
+      - name: Assemble the release notes and assets
+        if: steps.version.outputs.release == 'true'
+        run: |
+          set -eu
+          version="${{ steps.version.outputs.value }}"
+          mkdir -p dist
+
+          # The deployment files are attached so they can be fetched without
+          # cloning, and so each release keeps the pair that matches its image.
+          cp compose.yaml dist/compose.yaml
+          cp .env.example dist/env.example
+
+          # Pull just this version's section out of the changelog.
+          awk -v v="## ${version}" '
+            $0 ~ "^"v"($| )" { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > dist/notes.md
+
+          {
+            echo
+            echo "### Container image"
+            echo
+            echo '```bash'
+            echo "docker pull ${REGISTRY}/${IMAGE_NAME}:${version}"
+            echo '```'
+            echo
+            echo "Also published as \`latest\`. Platforms: \`linux/amd64\`, \`linux/arm64\`, \`linux/arm/v7\`."
+            echo
+            echo "Digest: \`${{ steps.push.outputs.digest }}\`"
+            echo
+            echo "### Home Assistant add-on"
+            echo
+            echo "Set the add-on's \`version\` to \`${version}\` in"
+            echo "[home-assistant-apps](https://github.com/steiner-dominik/home-assistant-apps)."
+            echo
+            echo "### Files"
+            echo
+            echo "\`compose.yaml\` and \`env.example\` below match this release."
+          } >> dist/notes.md
+
+      - name: Publish the GitHub release
+        if: steps.version.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file dist/notes.md \
+            dist/compose.yaml dist/env.example
+
       - name: Summary
         run: |
           {
             echo "### Published"
             echo
             echo '```'
-            echo "${{ steps.meta.outputs.tags }}"
+            echo "${{ steps.version.outputs.tags }}"
             echo '```'
             echo
             echo "Digest: \`${{ steps.push.outputs.digest }}\`"

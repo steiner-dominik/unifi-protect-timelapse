@@ -43,6 +43,25 @@ type Data struct {
 
 	ArchiveAvailable bool      `json:"archiveAvailable"`
 	Latest           *Snapshot `json:"latest,omitempty"`
+
+	// Monitor results. These are filled by the watchdog loop, which runs
+	// without capturing anything, and by capture itself where the two overlap.
+	LastProbeAt     time.Time `json:"lastProbeAt"`
+	LastProbeOK     time.Time `json:"lastProbeOk"`
+	LastProbeError  string    `json:"lastProbeError"`
+	CameraOnline    bool      `json:"cameraOnline"`
+	ArchiveNewestAt time.Time `json:"archiveNewestAt"`
+	ArchiveNewest   string    `json:"archiveNewest"`
+
+	// Frozen-frame detection. A camera can answer with the same bytes forever;
+	// counting identical frames in a row is what catches that.
+	LastFrameHash  string `json:"lastFrameHash"`
+	IdenticalCount int    `json:"identicalCount"`
+	FrameFrozen    bool   `json:"frameFrozen"`
+
+	// CameraLastUsed names the endpoint that served the most recent frame:
+	// "primary", "fallback" or "none".
+	CameraLastUsed string `json:"cameraLastUsed"`
 }
 
 // Store is a concurrency-safe, disk-backed Data.

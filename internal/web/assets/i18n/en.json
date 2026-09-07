@@ -43,7 +43,12 @@
     "first": "First image",
     "last": "Last image",
     "previous": "Previous image",
-    "next": "Next image"
+    "next": "Next image",
+    "frames": "frames",
+    "gaps": "gaps",
+    "missing": "missing frames",
+    "video": "Download video",
+    "zip": "Download images"
   },
   "status": {
     "heading": "Status",
@@ -85,10 +90,15 @@
     "sentinel": "Sentinel file",
     "syncMode": "Sync mode",
     "syncAt": "Nightly sync at",
-    "auth": "Authentication enabled",
     "metrics": "Metrics endpoint",
     "notify": "Failure webhook",
-    "version": "Version"
+    "version": "Version",
+    "cameraFallback": "Fallback source",
+    "noFallback": "none",
+    "authMode": "Authentication mode",
+    "monitor": "Monitoring enabled",
+    "video": "Video rendering",
+    "haPublish": "Home Assistant entities"
   },
   "update": {
     "available": "A new version is available.",
@@ -97,5 +107,20 @@
   "footer": {
     "disclaimer": "Community project. Not affiliated with, endorsed by or sponsored by Ubiquiti Inc., Raspberry Pi Ltd., Docker Inc. or any other company or product referenced here. All trademarks are the property of their respective owners.",
     "madeBy": "A project by"
+  },
+  "monitor": {
+    "heading": "Camera and archive",
+    "cameraOnline": "Camera reachable",
+    "lastProbe": "Last check",
+    "probeError": "Last check error",
+    "sourceInUse": "Source in use",
+    "source_primary": "primary",
+    "source_fallback": "fallback",
+    "source_none": "none",
+    "archiveNewest": "Newest archived image",
+    "archiveNewestFile": "Newest file",
+    "archiveMaxAge": "Staleness limit",
+    "frameFrozen": "Camera frozen",
+    "identicalFrames": "Identical frames in a row"
   }
 }

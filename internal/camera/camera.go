@@ -35,8 +35,43 @@ type Source interface {
 	Describe() string
 }
 
-// New builds the Source selected by the configuration.
+// New builds the Source named by CAMERA_SOURCE, without retries or fallback.
 func New(cfg *config.Config, log *slog.Logger) (Source, error) {
+	return newSource(cfg, cfg.Camera.Kind, log)
+}
+
+// Build assembles the complete snapshot pipeline: the primary source with its
+// retries and, when configured, a fallback source with its own retries behind
+// it. This is what the service uses; New exists for callers that want one bare
+// source.
+func Build(cfg *config.Config, log *slog.Logger) (Source, error) {
+	primary, err := newSource(cfg, cfg.Camera.Kind, log)
+	if err != nil {
+		return nil, fmt.Errorf("primary camera source: %w", err)
+	}
+	pipeline := withRetries(cfg, primary, log)
+
+	if cfg.Camera.Fallback == "" {
+		return pipeline, nil
+	}
+
+	fallback, err := newSource(cfg, cfg.Camera.Fallback, log)
+	if err != nil {
+		return nil, fmt.Errorf("fallback camera source: %w", err)
+	}
+	return NewChain(pipeline, withRetries(cfg, fallback, log), log), nil
+}
+
+func withRetries(cfg *config.Config, source Source, log *slog.Logger) Source {
+	return &Retrying{
+		Source:   source,
+		Attempts: cfg.Camera.Retries,
+		Delay:    cfg.Camera.RetryDelay,
+		Log:      log,
+	}
+}
+
+func newSource(cfg *config.Config, kind config.SourceKind, log *slog.Logger) (Source, error) {
 	client := &http.Client{
 		Timeout: cfg.Camera.Timeout,
 		// Snapshot endpoints should not be redirecting anywhere; following a
@@ -49,7 +84,7 @@ func New(cfg *config.Config, log *slog.Logger) (Source, error) {
 		},
 	}
 
-	switch cfg.Camera.Kind {
+	switch kind {
 	case config.SourceSnapshot:
 		return &snapshotSource{client: client, url: cfg.Camera.SnapshotURL, cfg: cfg.Camera}, nil
 	case config.SourceProtect:
@@ -62,7 +97,7 @@ func New(cfg *config.Config, log *slog.Logger) (Source, error) {
 		}
 		return &protectSource{client: client, cfg: cfg.Camera}, nil
 	default:
-		return nil, fmt.Errorf("unsupported camera source %q", cfg.Camera.Kind)
+		return nil, fmt.Errorf("unsupported camera source %q", kind)
 	}
 }
 

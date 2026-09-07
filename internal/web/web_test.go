@@ -13,6 +13,7 @@ import (
 
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/capture"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/config"
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/monitor"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/schedule"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/state"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/syncer"
@@ -40,8 +41,11 @@ func newTestServer(t *testing.T, token string) (*Server, *config.Config) {
 		Web: config.Web{
 			Enabled: true, Addr: ":0", AuthToken: token,
 			DefaultLanguage: "en", ArchiveEnabled: true, LivePreview: true,
-			LiveMinInterval: time.Second,
+			LiveMinInterval: time.Second, ZipEnabled: true,
+			AuthMode: authModeFor(token),
 		},
+		Monitor: config.Monitor{Enabled: true, Interval: time.Minute, ArchiveMaxAge: 15 * time.Minute, FrozenThreshold: 3},
+		Video:   config.Video{Enabled: true, FPS: 12, CRF: 23, FFmpeg: "ffmpeg-not-installed-for-tests"},
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -58,11 +62,23 @@ func newTestServer(t *testing.T, token string) (*Server, *config.Config) {
 		Scheduler: schedule.New(cfg),
 		Log:       log,
 		Version:   "test-1.2.3",
+		// Wired exactly as main does, so the archive fallback is exercised.
+		NewestFrame: func() (string, time.Time, error) {
+			return monitor.NewestFrame(cfg)
+		},
 	})
 	if err != nil {
 		t.Fatalf("building server: %v", err)
 	}
 	return server, cfg
+}
+
+// authModeFor mirrors the default the configuration loader applies.
+func authModeFor(token string) config.AuthMode {
+	if token == "" {
+		return config.AuthNone
+	}
+	return config.AuthLocal
 }
 
 func TestSecurityHeadersArePresent(t *testing.T) {

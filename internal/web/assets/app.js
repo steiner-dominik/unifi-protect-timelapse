@@ -12,6 +12,13 @@
 // Reading it from there keeps this file byte-identical across releases, so it
 // stays cacheable, while still letting a long-lived tab notice an update.
 const VERSION = document.documentElement.dataset.version ?? "";
+
+// Path the app is served under. Empty normally; under Home Assistant ingress
+// it is the Supervisor's generated prefix, so every request has to carry it.
+const BASE = document.documentElement.dataset.base ?? "";
+
+/** Builds a same-origin URL that works both standalone and behind ingress. */
+const url = (path) => BASE + path;
 const STORAGE = {
   theme: "timelapse.theme",
   lang: "timelapse.lang",
@@ -43,10 +50,10 @@ function writeStored(key, value) {
   }
 }
 
-async function getJSON(url) {
-  const response = await fetch(url, { headers: { Accept: "application/json" } });
+async function getJSON(path) {
+  const response = await fetch(url(path), { headers: { Accept: "application/json" } });
   if (!response.ok) {
-    throw new Error(`${url} responded ${response.status}`);
+    throw new Error(`${path} responded ${response.status}`);
   }
   return response.json();
 }
@@ -191,7 +198,7 @@ function showView(name) {
  *  because the file is replaced in place on every capture. */
 function reloadLatest() {
   const image = $("live-image");
-  image.src = `/api/latest.jpg?t=${Date.now()}`;
+  image.src = url(`/api/latest.jpg?t=${Date.now()}`);
   setLiveBadge("live.badgeArchived", "ok");
   renderLiveCaption(status?.capture?.latestCapturedAt, status?.capture?.latestFilename);
 }
@@ -201,7 +208,7 @@ async function loadPreview() {
   button.disabled = true;
   setLiveBadge("live.badgeLoading", null);
   try {
-    const response = await fetch(`/api/live.jpg?t=${Date.now()}`);
+    const response = await fetch(url(`/api/live.jpg?t=${Date.now()}`));
     if (!response.ok) throw new Error(String(response.status));
 
     const blob = await response.blob();
@@ -294,6 +301,47 @@ async function loadFrames(day) {
   applyGroupFilter();
 }
 
+/** Fetches the completeness report and updates the export links for a day. */
+async function loadReport(day) {
+  const group = $("group-field").hidden ? "" : $("sel-group").value;
+  const query = group ? `?group=${encodeURIComponent(group)}` : "";
+
+  const video = $("btn-video");
+  const zip = $("btn-zip");
+  video.hidden = !(status?.monitor?.videoAvailable);
+  zip.hidden = !(status?.config?.zipEnabled);
+  video.href = url(`/api/archive/days/${encodeURIComponent(day)}/video.mp4${query}`);
+  zip.href = url(`/api/archive/days/${encodeURIComponent(day)}/download.zip${query}`);
+
+  const element = $("archive-report");
+  try {
+    const report = await getJSON(`/api/archive/days/${encodeURIComponent(day)}/report${query}`);
+    const parts = [`${report.frames} ${t("archive.frames", "frames")}`];
+
+    if (report.gaps.length > 0) {
+      parts.push(
+        `${report.gaps.length} ${t("archive.gaps", "gaps")}`,
+        `${report.missingFrames} ${t("archive.missing", "missing")}`,
+      );
+      // Name the worst offenders so a gap is actionable rather than a number.
+      const worst = [...report.gaps]
+        .sort((a, b) => b.seconds - a.seconds)
+        .slice(0, 3)
+        .map((gap) => `${gap.after}\u2009\u2192\u2009${gap.before}`)
+        .join(", ");
+      parts.push(worst);
+      element.dataset.tone = "warn";
+    } else {
+      delete element.dataset.tone;
+    }
+
+    element.textContent = parts.join(" \u00b7 ");
+    element.hidden = false;
+  } catch {
+    element.hidden = true;
+  }
+}
+
 function applyGroupFilter() {
   const groupSelect = $("sel-group");
   const group = $("group-field").hidden ? null : groupSelect.value;
@@ -311,7 +359,10 @@ function applyGroupFilter() {
   $("archive-player").hidden = !hasFrames;
   $("archive-empty").hidden = hasFrames;
 
-  if (hasFrames) showFrame(0);
+  if (hasFrames) {
+    showFrame(0);
+    void loadReport(archive.filtered[0].day);
+  }
 }
 
 function showFrame(index) {
@@ -320,7 +371,7 @@ function showFrame(index) {
 
   const frame = archive.filtered[archive.index];
   $("archive-image").src =
-    `/api/archive/days/${encodeURIComponent(frame.day)}/frames/${encodeURIComponent(frame.name)}`;
+    url(`/api/archive/days/${encodeURIComponent(frame.day)}/frames/${encodeURIComponent(frame.name)}`);
   $("scrubber").value = String(archive.index);
   renderArchiveCaption();
 }
@@ -451,8 +502,54 @@ function renderStatus(data) {
     { key: "status.uptime", value: data.uptime },
   ]);
 
+  const monitor = data.monitor;
+  const showMonitor = monitor.enabled || monitor.archiveNewestAt || capture.active;
+  $("monitor-card").hidden = !showMonitor;
+
+  if (showMonitor) {
+    const monitorOk = monitor.cameraOnline && !monitor.archiveStale && !monitor.frameFrozen;
+    const monitorBadge = $("monitor-badge");
+    monitorBadge.textContent = monitorOk ? t("status.ok", "Healthy") : t("status.problem", "Attention");
+    monitorBadge.dataset.tone = monitorOk ? "ok" : "error";
+
+    renderFacts($("monitor-facts"), [
+      {
+        key: "monitor.cameraOnline",
+        value: monitor.lastProbe || capture.lastSuccess ? yesNo(monitor.cameraOnline) : "—",
+        tone: monitor.cameraOnline ? "ok" : "error",
+      },
+      { key: "monitor.lastProbe", value: monitor.lastProbe ? `${formatDateTime(monitor.lastProbe)} (${formatAge(monitor.lastProbe)})` : null },
+      { key: "monitor.probeError", value: monitor.lastProbeError, tone: "error" },
+      {
+        key: "monitor.sourceInUse",
+        value: monitor.sourceInUse ? t(`monitor.source_${monitor.sourceInUse}`, monitor.sourceInUse) : null,
+        tone: monitor.sourceInUse === "fallback" ? "warn" : null,
+      },
+      {
+        key: "monitor.archiveNewest",
+        value: monitor.archiveNewestAt
+          ? `${formatDateTime(monitor.archiveNewestAt)} (${formatAge(monitor.archiveNewestAt)})`
+          : "—",
+        tone: monitor.archiveStale ? "error" : null,
+      },
+      { key: "monitor.archiveNewestFile", value: monitor.archiveNewest },
+      { key: "monitor.archiveMaxAge", value: monitor.archiveMaxAge },
+      {
+        key: "monitor.frameFrozen",
+        value: yesNo(monitor.frameFrozen),
+        tone: monitor.frameFrozen ? "error" : null,
+      },
+      {
+        key: "monitor.identicalFrames",
+        value: monitor.identicalFrames,
+        tone: monitor.identicalFrames > 0 ? "warn" : null,
+      },
+    ]);
+  }
+
   renderFacts($("config-facts"), [
     { key: "config.cameraSource", value: config.cameraSource },
+    { key: "config.cameraFallback", value: config.cameraFallback || t("config.noFallback", "none") },
     { key: "config.cameraTarget", value: config.cameraTarget },
     { key: "config.protectKey", value: config.cameraSource === "protect" ? yesNo(config.protectKeySet) : null },
     {
@@ -470,7 +567,10 @@ function renderStatus(data) {
     { key: "config.sentinel", value: config.archiveSentinel },
     { key: "config.syncMode", value: config.syncMode },
     { key: "config.syncAt", value: config.syncMode === "off" ? null : config.syncAt },
-    { key: "config.auth", value: yesNo(config.authEnabled) },
+    { key: "config.authMode", value: config.authMode },
+    { key: "config.monitor", value: yesNo(config.monitorEnabled) },
+    { key: "config.video", value: yesNo(data.monitor.videoAvailable) },
+    { key: "config.haPublish", value: yesNo(config.haPublish) },
     { key: "config.metrics", value: yesNo(config.metricsEnabled) },
     { key: "config.notify", value: yesNo(config.notifyEnabled) },
     { key: "config.version", value: data.version },
@@ -556,6 +656,10 @@ async function main() {
 
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
+  // Under Home Assistant ingress the app lives on a generated sub-path that
+  // changes between sessions, so a worker scoped to it would be useless and
+  // its cache would go stale immediately.
+  if (BASE !== "") return;
   navigator.serviceWorker.register("/sw.js").then((registration) => {
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;

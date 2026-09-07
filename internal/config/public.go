@@ -14,6 +14,7 @@ type Public struct {
 	Timezone        string `json:"timezone"`
 	LogLevel        string `json:"logLevel"`
 	CameraSource    string `json:"cameraSource"`
+	CameraFallback  string `json:"cameraFallback"`
 	CameraTarget    string `json:"cameraTarget"`
 	ProtectKeySet   bool   `json:"protectKeySet"`
 	ProtectInsecure bool   `json:"protectInsecureTls"`
@@ -27,6 +28,7 @@ type Public struct {
 	ArchiveSentinel string `json:"archiveSentinel"`
 	SyncMode        string `json:"syncMode"`
 	SyncAt          string `json:"syncAt"`
+	SyncInterval    string `json:"syncInterval"`
 	AuthEnabled     bool   `json:"authEnabled"`
 	ArchiveBrowsing bool   `json:"archiveBrowsing"`
 	LivePreview     bool   `json:"livePreview"`
@@ -34,6 +36,15 @@ type Public struct {
 	MetricsEnabled  bool   `json:"metricsEnabled"`
 	DefaultLanguage string `json:"defaultLanguage"`
 	SiteName        string `json:"siteName"`
+	MonitorEnabled  bool   `json:"monitorEnabled"`
+	MonitorInterval string `json:"monitorInterval"`
+	ArchiveMaxAge   string `json:"archiveMaxAge"`
+	FrozenThreshold int    `json:"frozenThreshold"`
+	AuthMode        string `json:"authMode"`
+	VideoEnabled    bool   `json:"videoEnabled"`
+	ZipEnabled      bool   `json:"zipEnabled"`
+	ArchiveProxy    string `json:"archiveProxy"`
+	HAPublish       bool   `json:"haPublish"`
 }
 
 // Public returns the redacted configuration view.
@@ -42,6 +53,7 @@ func (c *Config) Public() Public {
 		Timezone:        c.Location.String(),
 		LogLevel:        c.LogLevel,
 		CameraSource:    string(c.Camera.Kind),
+		CameraFallback:  string(c.Camera.Fallback),
 		ProtectKeySet:   c.Camera.SecretSet(),
 		ProtectInsecure: c.Camera.ProtectInsecureTLS,
 		CaptureEnabled:  c.Capture.Enabled,
@@ -52,6 +64,7 @@ func (c *Config) Public() Public {
 		ArchiveSentinel: c.Sync.Sentinel,
 		SyncMode:        string(c.Sync.Mode),
 		SyncAt:          c.Sync.At,
+		SyncInterval:    syncIntervalLabel(c.Sync.Interval),
 		AuthEnabled:     c.Web.AuthToken != "",
 		ArchiveBrowsing: c.Web.ArchiveEnabled,
 		LivePreview:     c.Web.LivePreview,
@@ -59,18 +72,26 @@ func (c *Config) Public() Public {
 		MetricsEnabled:  c.MetricsEnabled,
 		DefaultLanguage: c.Web.DefaultLanguage,
 		SiteName:        c.Web.SiteName,
+		MonitorEnabled:  c.Monitor.Enabled,
+		MonitorInterval: c.Monitor.Interval.String(),
+		ArchiveMaxAge:   c.Monitor.ArchiveMaxAge.String(),
+		FrozenThreshold: c.Monitor.FrozenThreshold,
+		AuthMode:        string(c.Web.AuthMode),
+		VideoEnabled:    c.Video.Enabled,
+		ZipEnabled:      c.Web.ZipEnabled,
+		ArchiveProxy:    SanitizeURL(c.Web.ArchiveProxyURL),
+		HAPublish:       c.HA.PublishEnabled,
 	}
 
-	switch c.Camera.Kind {
-	case SourceProtect:
-		p.CameraTarget = SanitizeURL(c.Camera.ProtectHost) + " (camera " + c.Camera.ProtectCameraID + ")"
-	default:
-		p.CameraTarget = SanitizeURL(c.Camera.SnapshotURL)
+	p.CameraTarget = c.describeSource(c.Camera.Kind)
+	if c.Camera.Fallback != "" {
+		p.CameraTarget += "  →  fallback: " + c.describeSource(c.Camera.Fallback)
 	}
 
-	if c.SyncEnabled() {
-		p.ArchiveDir = c.Sync.ArchiveDir
-	}
+	// The archive is reported whenever it is configured, not only when this
+	// instance syncs to it: a watchdog deployment has sync switched off but
+	// still reads the archive to judge how fresh it is.
+	p.ArchiveDir = c.Sync.ArchiveDir
 
 	switch c.Schedule.Mode {
 	case ScheduleSolar:
@@ -79,6 +100,15 @@ func (c *Config) Public() Public {
 		p.ActiveWindow = pad2(c.Schedule.StartHour) + ":00 – " + pad2(c.Schedule.EndHour) + ":59"
 	}
 	return p
+}
+
+// syncIntervalLabel renders the periodic sweep cadence, or empty when the
+// periodic sweep is off.
+func syncIntervalLabel(d interface{ String() string }) string {
+	if s := d.String(); s != "0s" {
+		return s
+	}
+	return ""
 }
 
 func offsetLabel(d interface{ String() string }) string {
@@ -97,6 +127,16 @@ func pad2(v int) string {
 		return "0" + string(rune('0'+v))
 	}
 	return string(rune('0'+v/10)) + string(rune('0'+v%10))
+}
+
+// describeSource renders a source's endpoint without any secret material.
+func (c *Config) describeSource(kind SourceKind) string {
+	switch kind {
+	case SourceProtect:
+		return SanitizeURL(c.Camera.ProtectHost) + " (camera " + c.Camera.ProtectCameraID + ")"
+	default:
+		return SanitizeURL(c.Camera.SnapshotURL)
+	}
 }
 
 // SanitizeURL removes userinfo and the query string from a URL so that neither

@@ -177,3 +177,78 @@ func TestLiveDoesNotTouchTheSpool(t *testing.T) {
 		t.Error("a live preview must not count as a capture")
 	}
 }
+
+// A camera that answers with the same bytes forever looks healthy by every
+// other measure, which is exactly why this check exists.
+func TestFrozenFrameDetection(t *testing.T) {
+	frame := []byte{0xFF, 0xD8, 0xFF, 0x01, 0x02, 0x03}
+	source := &stubSource{data: frame}
+	capturer, cfg, store := newTestCapturer(t, source)
+	cfg.Monitor.FrozenThreshold = 3
+
+	// The first frame has no predecessor, so identical counting starts after it.
+	for i := range 3 {
+		result, err := capturer.Capture(context.Background())
+		if err != nil {
+			t.Fatalf("capture %d: %v", i, err)
+		}
+		if result.Frozen {
+			t.Fatalf("capture %d should not be flagged frozen yet (count %d)", i, result.IdenticalCount)
+		}
+	}
+
+	result, err := capturer.Capture(context.Background())
+	if err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if !result.Frozen {
+		t.Fatalf("expected the fourth identical frame to be flagged, count was %d", result.IdenticalCount)
+	}
+	if !store.Get().FrameFrozen {
+		t.Error("the frozen state should be persisted")
+	}
+}
+
+func TestFrozenDetectionResetsOnANewFrame(t *testing.T) {
+	source := &stubSource{data: []byte{0xFF, 0xD8, 0xFF, 0x01}}
+	capturer, cfg, store := newTestCapturer(t, source)
+	cfg.Monitor.FrozenThreshold = 2
+
+	for range 4 {
+		if _, err := capturer.Capture(context.Background()); err != nil {
+			t.Fatalf("capture: %v", err)
+		}
+	}
+	if !store.Get().FrameFrozen {
+		t.Fatal("expected the camera to be flagged frozen")
+	}
+
+	// A genuinely new frame clears the condition.
+	source.data = []byte{0xFF, 0xD8, 0xFF, 0x99}
+	result, err := capturer.Capture(context.Background())
+	if err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if result.Frozen || result.IdenticalCount != 0 {
+		t.Errorf("a new frame should clear the frozen state, got frozen=%v count=%d",
+			result.Frozen, result.IdenticalCount)
+	}
+	if store.Get().FrameFrozen {
+		t.Error("the persisted frozen state should be cleared")
+	}
+}
+
+func TestFrozenDetectionCanBeDisabled(t *testing.T) {
+	source := &stubSource{data: []byte{0xFF, 0xD8, 0xFF, 0x01}}
+	capturer, cfg, store := newTestCapturer(t, source)
+	cfg.Monitor.FrozenThreshold = 0
+
+	for range 5 {
+		if _, err := capturer.Capture(context.Background()); err != nil {
+			t.Fatalf("capture: %v", err)
+		}
+	}
+	if store.Get().FrameFrozen {
+		t.Error("frozen detection should be off when the threshold is zero")
+	}
+}

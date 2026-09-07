@@ -10,6 +10,8 @@ package capture
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -41,6 +43,11 @@ type Result struct {
 	Filename   string
 	Bytes      int64
 	CapturedAt time.Time
+	// Frozen is true when this frame was byte-identical to its predecessor
+	// often enough to conclude the camera has stopped producing new images.
+	Frozen bool
+	// IdenticalCount is how many consecutive frames have now been identical.
+	IdenticalCount int
 }
 
 // RelDir returns the archive-relative directory for an instant, e.g.
@@ -104,19 +111,45 @@ func (c *Capturer) Capture(ctx context.Context) (*Result, error) {
 		CapturedAt: now,
 	}
 
+	// A camera can keep answering with the same bytes forever. Comparing each
+	// frame with its predecessor is what distinguishes that from a working one,
+	// because every other signal still looks healthy.
+	hash := frameHash(data)
+
 	c.store.Update(func(d *state.Data) {
 		d.LastCaptureSuccess = now
 		d.LastCaptureError = ""
 		d.ConsecutiveFailures = 0
 		d.CapturesOK++
+		d.CameraLastUsed = camera.LastUsed(c.source)
 		d.Latest = &state.Snapshot{
 			Filename:   result.Filename,
 			RelPath:    result.RelPath,
 			CapturedAt: result.CapturedAt,
 			Bytes:      result.Bytes,
 		}
+
+		if d.LastFrameHash == hash {
+			d.IdenticalCount++
+		} else {
+			d.IdenticalCount = 0
+		}
+		d.LastFrameHash = hash
+		d.FrameFrozen = c.cfg.Monitor.FrozenThreshold > 0 &&
+			d.IdenticalCount >= c.cfg.Monitor.FrozenThreshold
+
+		result.IdenticalCount = d.IdenticalCount
+		result.Frozen = d.FrameFrozen
 	})
 	return result, nil
+}
+
+// frameHash identifies a frame by content. Only equality matters, and the
+// inputs are images from the operator's own camera rather than adversarial
+// input, but SHA-256 costs little at one frame per interval.
+func frameHash(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // Live fetches a frame for display only. Nothing is written to disk, so the

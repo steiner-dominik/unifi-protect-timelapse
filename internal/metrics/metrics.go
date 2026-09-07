@@ -82,6 +82,30 @@ func Write(w io.Writer, in Input) error {
 		"1 when images are moved out of the spool, 0 when SYNC_MODE=off.",
 		"timelapse_sync_enabled "+boolValue(in.SyncEnabled))
 
+	metric(&b, "timelapse_camera_online", "gauge",
+		"1 when the camera answered the most recent probe or capture.",
+		"timelapse_camera_online "+boolValue(in.State.CameraOnline))
+
+	metric(&b, "timelapse_camera_fallback_active", "gauge",
+		"1 when frames are being served by the fallback source rather than the primary.",
+		"timelapse_camera_fallback_active "+boolValue(in.State.CameraLastUsed == "fallback"))
+
+	metric(&b, "timelapse_frame_frozen", "gauge",
+		"1 when the camera keeps returning byte-identical frames.",
+		"timelapse_frame_frozen "+boolValue(in.State.FrameFrozen))
+
+	metric(&b, "timelapse_identical_frames", "gauge",
+		"Number of consecutive byte-identical frames received.",
+		"timelapse_identical_frames "+strconv.Itoa(in.State.IdenticalCount))
+
+	metric(&b, "timelapse_archive_newest_timestamp_seconds", "gauge",
+		"Modification time of the newest image in the archive.",
+		"timelapse_archive_newest_timestamp_seconds "+unix(in.State.ArchiveNewestAt.Unix(), in.State.ArchiveNewestAt.IsZero()))
+
+	metric(&b, "timelapse_last_probe_success_timestamp_seconds", "gauge",
+		"Unix timestamp of the last successful camera probe.",
+		"timelapse_last_probe_success_timestamp_seconds "+unix(in.State.LastProbeOK.Unix(), in.State.LastProbeOK.IsZero()))
+
 	_, err := io.WriteString(w, b.String())
 	return err
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/capture"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/config"
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/hass"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/notify"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/schedule"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/state"
@@ -52,6 +53,23 @@ func (r *runner) captureLoop(ctx context.Context) error {
 	}
 }
 
+// haSnapshot gathers the state Home Assistant entities are built from.
+func (r *runner) haSnapshot(version string, sync *syncer.Syncer) hass.Input {
+	in := hass.Input{
+		Version:          version,
+		Data:             r.store.Get(),
+		Spool:            sync.Spool(),
+		ArchiveAvailable: sync.ArchiveAvailable(),
+		CaptureEnabled:   r.cfg.Capture.Enabled,
+	}
+	if r.cfg.Capture.Enabled {
+		if next, ok := r.scheduler.NextCapture(time.Now().In(r.cfg.Location)); ok {
+			in.NextCapture = &next
+		}
+	}
+	return in
+}
+
 func (r *runner) captureOnce(ctx context.Context) {
 	// Bound the whole attempt, retries included, so a hung camera can never
 	// overlap the following interval.
@@ -88,10 +106,43 @@ func (r *runner) captureOnce(ctx context.Context) {
 	r.notifier.Resolve("capture_failed")
 	r.log.Info("captured", "file", result.Filename, "bytes", result.Bytes)
 
+	// A camera that answers with the same bytes every time looks healthy by
+	// every other measure, so it gets its own alert.
+	if result.Frozen {
+		r.log.Error("the camera is returning identical frames",
+			"identicalFrames", result.IdenticalCount)
+		r.notifier.Send(ctx, notify.Event{
+			Kind:     "frame_frozen",
+			Severity: "error",
+			Title:    "Timelapse camera appears frozen",
+			Message: "The last " + strconv.Itoa(result.IdenticalCount+1) +
+				" frames were byte-identical. The camera is answering but no longer producing new images.",
+		})
+	} else if result.IdenticalCount == 0 {
+		r.notifier.Resolve("frame_frozen")
+	}
+
 	// In opportunistic mode the frame is moved straight away when the archive
 	// is reachable, so at most one interval of images sits on local disk.
 	if r.cfg.Sync.Mode == config.SyncOpportunistic {
 		r.syncNow(ctx, "opportunistic")
+	}
+}
+
+// intervalSyncLoop runs a sweep on a fixed cadence. In the split deployment the
+// capturing container cannot trigger an opportunistic sync here, so this is
+// what keeps the window of images living only on local disk short.
+func (r *runner) intervalSyncLoop(ctx context.Context) error {
+	ticker := time.NewTicker(r.cfg.Sync.Interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			r.syncNow(ctx, "interval")
+		}
 	}
 }
 

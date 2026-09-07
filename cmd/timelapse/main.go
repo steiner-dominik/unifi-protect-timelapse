@@ -24,10 +24,13 @@ import (
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/camera"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/capture"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/config"
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/hass"
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/monitor"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/notify"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/schedule"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/state"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/syncer"
+	"github.com/steiner-dominik/unifi-protect-timelapse/internal/video"
 	"github.com/steiner-dominik/unifi-protect-timelapse/internal/web"
 )
 
@@ -67,6 +70,15 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error: "+err.Error())
 		os.Exit(1)
 	}
+}
+
+// describeSource names the camera pipeline, tolerating a deployment that has
+// none.
+func describeSource(source camera.Source) string {
+	if source == nil {
+		return "none"
+	}
+	return source.Describe()
 }
 
 func usage() {
@@ -121,16 +133,7 @@ func newLogger(cfg *config.Config) *slog.Logger {
 }
 
 func newSource(cfg *config.Config, log *slog.Logger) (camera.Source, error) {
-	source, err := camera.New(cfg, log)
-	if err != nil {
-		return nil, err
-	}
-	return &camera.Retrying{
-		Source:   source,
-		Attempts: cfg.Camera.Retries,
-		Delay:    cfg.Camera.RetryDelay,
-		Log:      log,
-	}, nil
+	return camera.Build(cfg, log)
 }
 
 func run() error {
@@ -139,26 +142,41 @@ func run() error {
 		return err
 	}
 
-	source, err := newSource(cfg, log)
-	if err != nil {
-		return err
+	// A deployment that neither captures nor monitors never talks to the
+	// camera, so it must not fail to start over camera settings it will not
+	// use.
+	var source camera.Source
+	if cfg.Capture.Enabled || cfg.Monitor.Enabled || cfg.Web.LivePreview {
+		source, err = newSource(cfg, log)
+		if err != nil {
+			return err
+		}
 	}
 
 	scheduler := schedule.New(cfg)
 	capturer := capture.New(cfg, source, store, log)
 	sync := syncer.New(cfg, store, log)
 	notifier := notify.New(cfg.Notify, log)
+	watchdog := monitor.New(cfg, source, store, log)
+	renderer := video.New(&cfg.Video, log)
+	publisher := hass.New(cfg.HA, log)
 
 	log.Info("starting unifi-protect-timelapse",
 		"version", version,
-		"camera", source.Describe(),
+		"camera", describeSource(source),
 		"timezone", cfg.Location.String(),
 		"interval", cfg.Capture.Interval,
 		"schedule", string(cfg.Schedule.Mode),
 		"window", cfg.Public().ActiveWindow,
 		"spool", cfg.Capture.SpoolDir,
 		"archive", cfg.Public().ArchiveDir,
-		"syncMode", string(cfg.Sync.Mode))
+		"syncMode", string(cfg.Sync.Mode),
+		"monitor", cfg.Monitor.Enabled,
+		"video", renderer.Available())
+
+	if cfg.Video.Enabled && !renderer.Available() {
+		log.Warn("video rendering is enabled but ffmpeg was not found; the render button will be hidden")
+	}
 
 	if err := os.MkdirAll(cfg.Capture.SpoolDir, 0o750); err != nil {
 		return fmt.Errorf("creating spool directory: %w", err)
@@ -183,7 +201,7 @@ func run() error {
 		notifier:  notifier,
 	}
 
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 6)
 	started := 0
 
 	if cfg.Capture.Enabled {
@@ -196,6 +214,25 @@ func run() error {
 	if cfg.SyncEnabled() {
 		started++
 		go func() { errCh <- runner.syncLoop(ctx) }()
+
+		if cfg.Sync.Interval > 0 {
+			started++
+			go func() { errCh <- runner.intervalSyncLoop(ctx) }()
+		}
+	}
+
+	if cfg.Monitor.Enabled {
+		started++
+		go func() { errCh <- watchdog.Run(ctx) }()
+	}
+
+	if publisher.Enabled() {
+		started++
+		go func() {
+			errCh <- publisher.Run(ctx, func() hass.Input {
+				return runner.haSnapshot(version, sync)
+			})
+		}()
 	}
 
 	if cfg.Web.Enabled {
@@ -205,8 +242,12 @@ func run() error {
 			Capturer:  capturer,
 			Syncer:    sync,
 			Scheduler: scheduler,
+			Video:     renderer,
 			Log:       log,
 			Version:   version,
+			NewestFrame: func() (string, time.Time, error) {
+				return monitor.NewestFrame(cfg)
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("preparing web interface: %w", err)
@@ -216,7 +257,7 @@ func run() error {
 	}
 
 	if started == 0 {
-		return errors.New("nothing to do: capture, sync and the web interface are all disabled")
+		return errors.New("nothing to do: capture, sync, monitoring and the web interface are all disabled")
 	}
 
 	// The first error wins; the shared context then unwinds the rest.
@@ -312,12 +353,19 @@ func runListCameras() error {
 // runHealthcheck backs the container health check. It reads the persisted state
 // rather than talking to the HTTP server, so it also works when the web
 // interface is disabled.
+//
+// What "healthy" means depends on the deployment: a capturing instance must be
+// writing frames, while a watchdog instance must be seeing a reachable camera
+// and a fresh archive.
 func runHealthcheck() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	if !cfg.Capture.Enabled {
+	if !cfg.Capture.Enabled && !cfg.Monitor.Enabled {
+		return nil
+	}
+	if !schedule.New(cfg).Active(time.Now().In(cfg.Location)) {
 		return nil
 	}
 
@@ -326,14 +374,32 @@ func runHealthcheck() error {
 		return fmt.Errorf("no state written yet: %w", err)
 	}
 
-	if !schedule.New(cfg).Active(time.Now().In(cfg.Location)) {
-		return nil
+	if cfg.Capture.Enabled {
+		if data.LastCaptureSuccess.IsZero() {
+			return errors.New("no successful capture recorded")
+		}
+		if age := time.Since(data.LastCaptureSuccess); age > 2*cfg.Capture.Interval {
+			return fmt.Errorf("last successful capture was %s ago", age.Truncate(time.Second))
+		}
+		if data.FrameFrozen {
+			return fmt.Errorf("the camera has returned %d identical frames in a row", data.IdenticalCount)
+		}
 	}
-	if data.LastCaptureSuccess.IsZero() {
-		return errors.New("no successful capture recorded")
-	}
-	if age := time.Since(data.LastCaptureSuccess); age > 2*cfg.Capture.Interval {
-		return fmt.Errorf("last successful capture was %s ago", age.Truncate(time.Second))
+
+	if cfg.Monitor.Enabled {
+		if data.LastProbeAt.IsZero() {
+			return errors.New("no camera probe recorded")
+		}
+		if !data.CameraOnline {
+			return fmt.Errorf("the camera is not reachable: %s", data.LastProbeError)
+		}
+		if data.ArchiveNewestAt.IsZero() {
+			return errors.New("no image found in the archive")
+		}
+		if age := time.Since(data.ArchiveNewestAt); age > cfg.Monitor.ArchiveMaxAge {
+			return fmt.Errorf("newest archived image is %s old, limit is %s",
+				age.Truncate(time.Second), cfg.Monitor.ArchiveMaxAge)
+		}
 	}
 	return nil
 }

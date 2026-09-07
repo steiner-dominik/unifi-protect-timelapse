@@ -16,29 +16,37 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
 
-# CGO is off so the result is a static binary that runs on a scratch base.
-# The version is compiled in; the web frontend uses it to invalidate caches.
+# CGO is off so the binary is static and depends on nothing in the runtime
+# image. The version is compiled in; the web frontend uses it to invalidate
+# cached assets on every release.
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
     -o /out/timelapse ./cmd/timelapse
 
 # --- runtime ----------------------------------------------------------------
-# distroless/static provides CA certificates for HTTPS to the Protect console
-# and nothing else: no shell, no package manager, minimal attack surface.
-FROM gcr.io/distroless/static-debian12:nonroot
+# Alpine rather than distroless because timelapse video rendering needs ffmpeg.
+# Everything else the binary needs is compiled in, so the image stays small:
+# ca-certificates for HTTPS to the Protect console, and nothing further.
+FROM alpine:3.22
 
 ARG VERSION=dev
 ARG REVISION=unknown
 
 LABEL org.opencontainers.image.title="unifi-protect-timelapse" \
-      org.opencontainers.image.description="Timelapse capture service for UniFi Protect cameras with local buffering and archive sync" \
+      org.opencontainers.image.description="Timelapse capture service for UniFi Protect cameras with local buffering, archive sync and video rendering" \
       org.opencontainers.image.source="https://github.com/steiner-dominik/unifi-protect-timelapse" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}"
 
-COPY --from=build /out/timelapse /timelapse
+RUN apk add --no-cache ca-certificates ffmpeg tzdata \
+ && addgroup -g 1000 -S timelapse \
+ && adduser -u 1000 -S -G timelapse timelapse \
+ && mkdir -p /spool /archive /state \
+ && chown timelapse:timelapse /spool /archive /state
+
+COPY --from=build /out/timelapse /usr/local/bin/timelapse
 
 # Defaults for the in-container paths; override with volumes in compose.
 ENV SPOOL_DIR=/spool \
@@ -49,11 +57,12 @@ ENV SPOOL_DIR=/spool \
 EXPOSE 8080
 
 # The binary checks its own persisted state, so this works even when the web
-# interface is disabled. It reports unhealthy when captures have stopped inside
-# the active window, which is the failure that previously went unnoticed.
-HEALTHCHECK --interval=2m --timeout=10s --start-period=1m --retries=2 \
-    CMD ["/timelapse", "healthcheck"]
+# interface is disabled. It reports unhealthy when captures stall inside the
+# active window, or, for a watchdog deployment, when the camera stops answering
+# or the archive stops growing.
+HEALTHCHECK --interval=2m --timeout=15s --start-period=1m --retries=2 \
+    CMD ["/usr/local/bin/timelapse", "healthcheck"]
 
-USER nonroot:nonroot
-ENTRYPOINT ["/timelapse"]
+USER timelapse:timelapse
+ENTRYPOINT ["/usr/local/bin/timelapse"]
 CMD ["serve"]
