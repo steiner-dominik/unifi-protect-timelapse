@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 # Alpine rather than distroless because timelapse video rendering needs ffmpeg.
 # Everything else the binary needs is compiled in, so the image stays small:
 # ca-certificates for HTTPS to the Protect console, and nothing further.
-FROM alpine:3.22
+FROM alpine:3.24
 
 ARG VERSION=dev
 ARG REVISION=unknown
